@@ -70,3 +70,52 @@ done
 
 printf "\n\033[32m[OK]\033[0m %d skill(s) geïnstalleerd in %s\n" "${#SKILLS[@]}" "$TARGET_DIR"
 printf "Test in een nieuwe Cowork/Claude Code sessie.\n"
+
+# Stap 4 — tool-adapters (Copilot .instructions.md + Codex AGENTS.md)
+# Per skill: installeer adapter-bestanden naar de juiste tool-locaties.
+
+detect_vscode_prompts_dir() {
+  case "$(uname -s)" in
+    Linux*)          echo "${HOME}/.config/Code/User/prompts" ;;
+    Darwin*)         echo "${HOME}/Library/Application Support/Code/User/prompts" ;;
+    MINGW*|MSYS*|CYGWIN*) echo "${APPDATA:-$HOME/AppData/Roaming}/Code/User/prompts" ;;
+    *)               echo "" ;;
+  esac
+}
+
+VSCODE_PROMPTS="$(detect_vscode_prompts_dir)"
+
+_install_adapter() {
+  local src="$1" dst="$2" label="$3"
+  if [ -z "$dst" ]; then return; fi
+  mkdir -p "$(dirname "$dst")"
+  if [ -L "$dst" ]; then
+    rm "$dst"
+  elif [ -e "$dst" ]; then
+    ts="$(date +%Y%m%d_%H%M%S)"
+    printf "\033[33m[WARN]\033[0m %s bestaat (geen symlink) → .backup-%s\n" "$dst" "$ts"
+    mv "$dst" "${dst}.backup-${ts}"
+  fi
+  ln -sfn "$src" "$dst"
+  printf "\033[32m[OK]\033[0m %-12s → %s\n" "$label" "$dst"
+}
+
+for skill in "${SKILLS[@]}"; do
+  src_dir="$CACHE_DIR/$skill"
+
+  # Copilot .instructions.md → VS Code user prompts
+  copilot_src="${src_dir}/${skill}.instructions.md"
+  if [ -f "$copilot_src" ] && [ -n "$VSCODE_PROMPTS" ]; then
+    _install_adapter "$copilot_src" "${VSCODE_PROMPTS}/${skill}.instructions.md" "Copilot"
+  fi
+
+  # Codex / Claude Code AGENTS.md → ~/.codex/AGENTS/<skill>.md
+  agents_src="${src_dir}/AGENTS.md"
+  codex_dst="${HOME}/.codex/AGENTS/${skill}.md"
+  if [ -f "$agents_src" ]; then
+    _install_adapter "$agents_src" "$codex_dst" "Codex"
+    # Maak ook ~/.claude/AGENTS/<skill>.md aan voor Claude Code
+    claude_agents_dst="${HOME}/.claude/AGENTS/${skill}.md"
+    _install_adapter "$agents_src" "$claude_agents_dst" "ClaudeCode"
+  fi
+done
