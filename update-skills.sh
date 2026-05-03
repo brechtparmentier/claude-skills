@@ -31,15 +31,16 @@ successes=()
 for server in "${SERVERS[@]}"; do
   printf "\n%s=== %s ===%s\n" "$CYAN" "$server" "$RST"
 
-  # Quick reachability check (2s)
-  if ! ssh -o ConnectTimeout=2 -o BatchMode=yes "$server" 'true' 2>/dev/null; then
+  # Quick reachability check (2s). StrictHostKeyChecking=accept-new zodat nieuwe
+  # servers niet fout-positief als unreachable worden gemarkeerd.
+  if ! ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=accept-new "$server" 'true' 2>/dev/null; then
     printf "%s[SKIP]%s niet bereikbaar (timeout/auth)\n" "$YELLOW" "$RST"
     failures+=("$server (unreachable)")
     continue
   fi
 
   # Run install.sh remotely — idempotent, handelt clone én pull af
-  if ssh "$server" "curl -sL '$INSTALL_URL' | bash -s '$SKILL_FILTER'"; then
+  if ssh -o StrictHostKeyChecking=accept-new "$server" "curl -sL '$INSTALL_URL' | bash -s '$SKILL_FILTER'"; then
     successes+=("$server")
   else
     printf "%s[FAIL]%s install/update mislukt\n" "$RED" "$RST"
