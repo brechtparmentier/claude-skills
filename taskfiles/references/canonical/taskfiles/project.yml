@@ -1,0 +1,96 @@
+# taskfiles/project.yml — nextjs_frontend-gdriverights
+# Projectspecifieke taken: build, lint, test, format
+version: '3'
+silent: true
+
+vars:
+  BUILD_CMD: pnpm run build
+  TEST_CMD: pnpm run test
+  TEST_WATCH_CMD: pnpm run test:watch
+  TEST_COVERAGE_CMD: pnpm run test:coverage
+  TEST_E2E_CMD: pnpm run test:e2e
+  LINT_CMD: pnpm run lint
+  LINT_FIX_CMD: pnpm run lint:fix
+  FORMAT_CMD: pnpm run format
+  FORMAT_CHECK_CMD: pnpm run format:check
+  TYPE_CHECK_CMD: pnpm run type-check
+
+tasks:
+  # ════════════════════════════════════════════════════════════════════════════
+  # BUILD
+  # ════════════════════════════════════════════════════════════════════════════
+  build:
+    desc: Build voor productie
+    silent: false
+    cmds:
+      - printf "\033[1m[INFO]\033[0m Building...\n"
+      - '{{.BUILD_CMD}}'
+      - printf "\033[32m[OK]\033[0m Build voltooid\n"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # TESTING
+  # ════════════════════════════════════════════════════════════════════════════
+  test:
+    desc: Run tests (jest)
+    silent: false
+    cmds:
+      - '{{.TEST_CMD}}'
+
+  test-watch:
+    desc: Run tests in watch mode
+    cmds:
+      - '{{.TEST_WATCH_CMD}}'
+
+  test-coverage:
+    desc: Run tests met coverage
+    silent: false
+    cmds:
+      - '{{.TEST_COVERAGE_CMD}}'
+
+  test-e2e:
+    desc: Run end-to-end tests (Playwright)
+    silent: false
+    cmds:
+      - '{{.TEST_E2E_CMD}}'
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # CODE QUALITY
+  # ════════════════════════════════════════════════════════════════════════════
+  lint:
+    desc: Lint code
+    silent: false
+    cmds:
+      - '{{.LINT_CMD}}'
+
+  lint-fix:
+    desc: Auto-fix lint issues
+    silent: false
+    cmds:
+      - '{{.LINT_FIX_CMD}}'
+
+  format:
+    desc: Format code met Prettier
+    silent: false
+    cmds:
+      - '{{.FORMAT_CMD}}'
+
+  format-check:
+    desc: Check formatting (geen wijzigingen)
+    silent: false
+    cmds:
+      - '{{.FORMAT_CHECK_CMD}}'
+
+  type-check:
+    desc: TypeScript type-check
+    silent: false
+    cmds:
+      - '{{.TYPE_CHECK_CMD}}'
+
+  check:
+    desc: Lint + type-check + format-check
+    silent: false
+    cmds:
+      - task: lint
+      - task: type-check
+      - task: format-check
+      - printf "\033[32m[OK]\033[0m Alle checks geslaagd\n"

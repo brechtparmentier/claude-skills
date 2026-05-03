@@ -1,0 +1,91 @@
+# Taskfile.yml — Python profile (drop-in template)
+# Stack: FastAPI/uvicorn backend, uv package manager, ruff lint+format, pytest
+# Pattern A — thin facade die delegeert naar core (lifecycle) + project (build/test/quality)
+version: '3'
+silent: true
+dotenv: ['.env.local', '.env']  # lokale override wint
+
+includes:
+  core:
+    taskfile: ./taskfiles/core.yml
+    optional: false
+  project:
+    taskfile: ./taskfiles/project.yml
+    optional: false
+  # Optioneel — voeg toe wanneer relevant:
+  # frontend:
+  #   taskfile: ./taskfiles/frontend.yml
+  #   optional: true
+  # db:
+  #   taskfile: ./taskfiles/db.yml
+  #   optional: true
+  # docker:
+  #   taskfile: ./taskfiles/docker.yml
+  #   optional: true
+
+tasks:
+  # ── Lifecycle ────────────────────────────────────────────────────────────
+  default:
+    desc: Toon help
+    silent: false
+    cmds: [task: core:help]
+
+  help:
+    desc: Toon beschikbare commando's
+    silent: false
+    cmds: [task: core:help]
+
+  setup:        { desc: First-time setup,         cmds: [task: core:setup] }
+  setup-quick:  { desc: Snelle setup (alleen sync), cmds: [task: core:setup-quick] }
+  doctor:       { desc: Health-check tooling/env, cmds: [task: core:doctor] }
+  install:      { desc: Install dependencies,     cmds: [task: core:install] }
+
+  start:        { desc: Start app,                cmds: [task: core:start] }
+  stop:         { desc: Stop app,                 cmds: [task: core:stop] }
+  restart:      { desc: Restart app,              cmds: [task: core:restart] }
+  logs:         { desc: Tail logs,                cmds: [task: core:logs] }
+  status:       { desc: Runtime status,           cmds: [task: core:status] }
+  ports:        { desc: Toon calcport-poorten,    cmds: [task: core:ports] }
+
+  # ── Project (testen/lint/format) ─────────────────────────────────────────
+  test:
+    desc: Run tests (pytest)
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:test
+
+  lint:
+    desc: Lint code (ruff check)
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:lint
+
+  lint:fix:
+    desc: Auto-fix lint issues (ruff check --fix)
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:lint-fix
+
+  format:
+    desc: Format code (ruff format)
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:format
+
+  format:check:
+    desc: Check formatting zonder wijzigingen
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:format-check
+
+  check:
+    desc: Lint + format-check
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:check
+
+  # ── Maintenance ──────────────────────────────────────────────────────────
+  clean:        { desc: Verwijder caches,         cmds: [task: core:clean] }
+  clean:logs:   { desc: Verwijder logbestanden,   cmds: [task: core:clean-logs] }
+  clean:all:    { desc: Verwijder .venv + caches, cmds: [task: core:clean-all] }
+  uninstall:    { desc: Verwijder .venv,          cmds: [task: core:uninstall] }

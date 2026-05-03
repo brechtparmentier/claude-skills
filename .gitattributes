@@ -1,0 +1,8 @@
+# Force LF for all text files (scripts run on Linux/macOS servers)
+* text=auto eol=lf
+
+# Explicitly LF for shell scripts and YAML
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf

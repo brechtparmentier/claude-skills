@@ -1,0 +1,351 @@
+# taskfiles/core.yml — lifecycle & infra voor kalendertool
+# ⛔ GEEN output: prefixed   ⛔ GEEN silent: false op taken (behalve help)
+version: '3'
+silent: true
+
+vars:
+  # ── Project identity ──────────────────────────────────────────────────────
+  APP_NAME: '{{default "kalendertool" .APP_NAME}}'
+
+  # ── Directories ───────────────────────────────────────────────────────────
+  BACKEND_DIR: '{{default "backend" .BACKEND_DIR}}'
+  FRONTEND_DIR: '{{default "frontend" .FRONTEND_DIR}}'
+  VENV_DIR: '{{default "backend/.venv" .VENV_DIR}}'
+
+  # ── Runtime ───────────────────────────────────────────────────────────────
+  RUNTIME_DIR: .task
+  PID_DIR: .task/pids
+  LOG_DIR: .task/logs
+  BACKEND_PID: .task/pids/backend.pid
+  BACKEND_PGID: .task/pids/backend.pgid
+  BACKEND_LOG: .task/logs/backend.log
+  FRONTEND_PID: .task/pids/frontend.pid
+  FRONTEND_PGID: .task/pids/frontend.pgid
+  FRONTEND_LOG: .task/logs/frontend.log
+  PROD_BACKEND_PID: .task/pids/backend-prod.pid
+  PROD_BACKEND_PGID: .task/pids/backend-prod.pgid
+  PROD_BACKEND_LOG: .task/logs/backend-prod.log
+  PROD_FRONTEND_PID: .task/pids/frontend-prod.pid
+  PROD_FRONTEND_PGID: .task/pids/frontend-prod.pgid
+  PROD_FRONTEND_LOG: .task/logs/frontend-prod.log
+
+  # ── Ports ─────────────────────────────────────────────────────────────────
+  FRONTEND_PORT: '{{default "24775" .FRONTEND_PORT}}'
+  BACKEND_PORT: '{{default "24776" .BACKEND_PORT}}'
+  PROD_FRONTEND_PORT: '{{default "24875" .PROD_FRONTEND_PORT}}'
+  PROD_BACKEND_PORT: '{{default "24876" .PROD_BACKEND_PORT}}'
+
+  # ── Docker ────────────────────────────────────────────────────────────────
+  USE_DOCKER: '{{default "0" .USE_DOCKER}}'
+  DOCKER_SERVICE: '{{default "" .DOCKER_SERVICE}}'
+
+  # ── VPN ───────────────────────────────────────────────────────────────────
+  VPN_IP: '{{default "" .VPN_IP}}'
+
+  # ── Timeouts ──────────────────────────────────────────────────────────────
+  START_TIMEOUT: '{{default "60" .START_TIMEOUT}}'
+  STOP_TIMEOUT: '{{default "15" .STOP_TIMEOUT}}'
+
+tasks:
+  # ════════════════════════════════════════════════════════════════════════════
+  # 📚 HELP
+  # ════════════════════════════════════════════════════════════════════════════
+  help:
+    desc: Toon beschikbare taken
+    silent: false
+    cmds:
+      - |
+        printf "\n\033[1;36m=== {{.APP_NAME}} ===\033[0m\n"
+        printf "\033[1mfrontend:\033[0m  port %s\n" "{{.FRONTEND_PORT}}"
+        printf "\033[1mbackend:\033[0m   port %s\n" "{{.BACKEND_PORT}}"
+        printf "\033[1mmode:\033[0m      %s\n" "$( [ '{{.USE_DOCKER}}' = '1' ] && echo docker || echo local )"
+        printf "\n\033[1;33mLifecycle:\033[0m\n"
+        printf "  \033[32mtask setup\033[0m       bootstrap dependencies\n"
+        printf "  \033[32mtask start\033[0m       start backend + frontend\n"
+        printf "  \033[32mtask stop\033[0m        stop backend + frontend\n"
+        printf "  \033[32mtask restart\033[0m     herstart services\n"
+        printf "  \033[32mtask status\033[0m      service status\n"
+        printf "  \033[32mtask logs\033[0m        volg logs\n"
+        printf "  \033[32mtask prod:start\033[0m  start productie backend + frontend\n"
+        printf "  \033[32mtask prod:stop\033[0m   stop productie backend + frontend\n"
+        printf "  \033[32mtask prod:restart\033[0m herstart productie services\n"
+        printf "  \033[32mtask prod:status\033[0m service status productie\n"
+        printf "  \033[32mtask prod:logs\033[0m   volg productielogs\n"
+        printf "  \033[32mtask clean\033[0m       verwijder artefacten\n"
+        printf "\n\033[1;33mProject:\033[0m\n"
+        printf "  \033[32mtask build\033[0m       build frontend\n"
+        printf "  \033[32mtask prod:build\033[0m  build productieversie\n"
+        printf "  \033[32mtask prod:rebuild\033[0m rebuild + restart productie\n"
+        printf "  \033[32mtask test\033[0m        run backend tests\n"
+        printf "  \033[32mtask lint\033[0m        lint backend + frontend\n"
+        printf "  \033[32mtask fmt\033[0m         formatteer code\n"
+        printf "  \033[32mtask config\033[0m      genereer .env.local\n"
+        printf "\n\033[1;33mDatabase:\033[0m\n"
+        printf "  \033[32mtask db:migrate\033[0m  run pending migrations\n"
+        printf "  \033[32mtask db:revision\033[0m autogenerate migration\n"
+        printf "  \033[32mtask db:history\033[0m  migratie geschiedenis\n"
+        printf "  \033[32mtask db:current\033[0m  huidige revisie\n"
+        printf "\n"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # 📦 SETUP
+  # ════════════════════════════════════════════════════════════════════════════
+  setup:
+    desc: Bootstrap dependencies + health-check
+    cmds:
+      - task: _ensure-dirs
+      - task: install
+      - task: doctor
+      - printf "\\033[32m[OK]\\033[0m Setup voltooid\\n"
+
+  install:
+    desc: Installeer backend + frontend dependencies
+    cmds:
+      - |
+        printf "\\033[1m[INFO]\\033[0m Backend dependencies installeren...\\n"
+        if [ ! -d "{{.VENV_DIR}}" ]; then
+          python3 -m venv "{{.VENV_DIR}}"
+        fi
+        "{{.VENV_DIR}}/bin/python" -m pip install -U pip >/dev/null
+        "{{.VENV_DIR}}/bin/python" -m pip install -e "{{.BACKEND_DIR}}" >/dev/null
+        cd "{{.BACKEND_DIR}}" && .venv/bin/alembic upgrade head 2>/dev/null || true
+        printf "\\033[32m[OK]\\033[0m Backend dependencies geïnstalleerd\\n"
+      - |
+        printf "\\033[1m[INFO]\\033[0m Frontend dependencies installeren...\\n"
+        cd "{{.FRONTEND_DIR}}" && pnpm install
+        printf "\\033[32m[OK]\\033[0m Frontend dependencies geïnstalleerd\\n"
+
+  doctor:
+    desc: Health-check — vereiste tools aanwezig?
+    cmds:
+      - |
+        MISSING=""
+        command -v node >/dev/null 2>&1 || MISSING="$MISSING node"
+        command -v python3 >/dev/null 2>&1 || MISSING="$MISSING python3"
+        command -v pnpm >/dev/null 2>&1 || MISSING="$MISSING pnpm"
+        [ "{{.USE_DOCKER}}" = "1" ] && ! command -v docker >/dev/null 2>&1 && MISSING="$MISSING docker"
+        if [ -n "$MISSING" ]; then
+          printf "\\033[31m[ERR]\\033[0m Ontbrekende tools:%s\\n" "$MISSING"
+          exit 1
+        fi
+        printf "\\033[32m[OK]\\033[0m Alle vereiste tools aanwezig\\n"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # 🚀 LIFECYCLE
+  # ════════════════════════════════════════════════════════════════════════════
+  start:
+    desc: Start backend + frontend
+    cmds:
+      - task: _ensure-dirs
+      - task: _start-backend
+      - task: _start-frontend
+      - task: _show-endpoints
+
+  stop:
+    desc: Stop backend + frontend
+    cmds:
+      - ./scripts/stop_service.sh backend "{{.BACKEND_PORT}}" "{{.BACKEND_PID}}" "{{.BACKEND_PGID}}" "{{.STOP_TIMEOUT}}"
+      - ./scripts/stop_service.sh frontend "{{.FRONTEND_PORT}}" "{{.FRONTEND_PID}}" "{{.FRONTEND_PGID}}" "{{.STOP_TIMEOUT}}"
+
+  restart:
+    desc: Herstart backend + frontend
+    cmds:
+      - task: stop
+      - sleep 2
+      - task: start
+
+  prod:start:
+    desc: Start productie backend + frontend
+    cmds:
+      - task: _ensure-dirs
+      - |
+        printf "\\033[1m[INFO]\\033[0m Productiebuild frontend...\\n"
+        cd "{{.FRONTEND_DIR}}" && pnpm run build
+        printf "\\033[32m[OK]\\033[0m Productiebuild voltooid\\n"
+      - task: _start-backend-prod
+      - task: _start-frontend-prod
+      - task: _show-prod-endpoints
+
+  prod:stop:
+    desc: Stop productie backend + frontend
+    cmds:
+      - ./scripts/stop_service.sh backend-prod "{{.PROD_BACKEND_PORT}}" "{{.PROD_BACKEND_PID}}" "{{.PROD_BACKEND_PGID}}" "{{.STOP_TIMEOUT}}"
+      - ./scripts/stop_service.sh frontend-prod "{{.PROD_FRONTEND_PORT}}" "{{.PROD_FRONTEND_PID}}" "{{.PROD_FRONTEND_PGID}}" "{{.STOP_TIMEOUT}}"
+
+  prod:restart:
+    desc: Herstart productie backend + frontend
+    cmds:
+      - task: prod:stop
+      - sleep 2
+      - task: prod:start
+
+  prod:status:
+    desc: Service status productie
+    cmds:
+      - ./scripts/status_service.sh backend-prod "{{.PROD_BACKEND_PORT}}" "{{.PROD_BACKEND_PID}}" "{{.PROD_BACKEND_PGID}}"
+      - ./scripts/status_service.sh frontend-prod "{{.PROD_FRONTEND_PORT}}" "{{.PROD_FRONTEND_PID}}" "{{.PROD_FRONTEND_PGID}}"
+      - task: _show-prod-endpoints
+
+  prod:logs:
+    desc: Volg productielogs
+    cmds:
+      - |
+        test -f "{{.PROD_BACKEND_LOG}}" || touch "{{.PROD_BACKEND_LOG}}"
+        test -f "{{.PROD_FRONTEND_LOG}}" || touch "{{.PROD_FRONTEND_LOG}}"
+        printf "\\033[1m[INFO]\\033[0m Volgen van productielogs (Ctrl+C om te stoppen)\\n"
+        tail -f "{{.PROD_BACKEND_LOG}}" "{{.PROD_FRONTEND_LOG}}"
+
+  logs:
+    desc: Volg logs
+    cmds:
+      - |
+        test -f "{{.BACKEND_LOG}}" || touch "{{.BACKEND_LOG}}"
+        test -f "{{.FRONTEND_LOG}}" || touch "{{.FRONTEND_LOG}}"
+        printf "\\033[1m[INFO]\\033[0m Volgen van logs (Ctrl+C om te stoppen)\\n"
+        tail -f "{{.BACKEND_LOG}}" "{{.FRONTEND_LOG}}"
+
+  status:
+    desc: Service status
+    cmds:
+      - ./scripts/status_service.sh backend "{{.BACKEND_PORT}}" "{{.BACKEND_PID}}" "{{.BACKEND_PGID}}"
+      - ./scripts/status_service.sh frontend "{{.FRONTEND_PORT}}" "{{.FRONTEND_PID}}" "{{.FRONTEND_PGID}}"
+      - task: _show-endpoints
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # 🧹 MAINTENANCE
+  # ════════════════════════════════════════════════════════════════════════════
+  clean:
+    desc: Verwijder build-artefacten
+    cmds:
+      - |
+        rm -rf dist build out coverage 2>/dev/null || true
+        rm -rf "{{.FRONTEND_DIR}}/.next" "{{.FRONTEND_DIR}}/out" 2>/dev/null || true
+        rm -f "{{.PID_DIR}}"/*.pid "{{.PID_DIR}}"/*.pgid 2>/dev/null || true
+        printf "\\033[32m[OK]\\033[0m Opgeruimd\\n"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # 🔧 INTERNAL
+  # ════════════════════════════════════════════════════════════════════════════
+  _ensure-dirs:
+    internal: true
+    cmds:
+      - mkdir -p "{{.PID_DIR}}" "{{.LOG_DIR}}"
+    status:
+      - test -d "{{.PID_DIR}}"
+      - test -d "{{.LOG_DIR}}"
+
+  _start-backend:
+    internal: true
+    cmds:
+      - ./scripts/start_backend.sh "{{.VENV_DIR}}" "{{.BACKEND_PID}}" "{{.BACKEND_PGID}}" "{{.BACKEND_LOG}}" "{{.BACKEND_PORT}}" "{{.START_TIMEOUT}}"
+
+  _start-frontend:
+    internal: true
+    cmds:
+      - ./scripts/start_frontend.sh "{{.FRONTEND_DIR}}" "{{.FRONTEND_PID}}" "{{.FRONTEND_PGID}}" "{{.FRONTEND_LOG}}" "{{.FRONTEND_PORT}}" "{{.START_TIMEOUT}}"
+
+  _start-backend-prod:
+    internal: true
+    cmds:
+      - ./scripts/start_backend_prod.sh "{{.VENV_DIR}}" "{{.PROD_BACKEND_PID}}" "{{.PROD_BACKEND_PGID}}" "{{.PROD_BACKEND_LOG}}" "{{.PROD_BACKEND_PORT}}" "{{.START_TIMEOUT}}"
+
+  _start-frontend-prod:
+    internal: true
+    cmds:
+      - ./scripts/start_frontend_prod.sh "{{.FRONTEND_DIR}}" "{{.PROD_FRONTEND_PID}}" "{{.PROD_FRONTEND_PGID}}" "{{.PROD_FRONTEND_LOG}}" "{{.PROD_FRONTEND_PORT}}" "{{.START_TIMEOUT}}"
+
+  _show-endpoints:
+    internal: true
+    silent: true
+    cmds:
+      - cmd: |
+          VPN_IP="{{.VPN_IP}}"
+          VPN_IFACE=""
+          if [ -n "$VPN_IP" ]; then
+            VPN_IFACE="(manueel)"
+          else
+            VPN_DATA="$(ip -4 addr 2>/dev/null | awk '
+              /^[0-9]+:/ { iface=$2; sub(/:$/,"",iface) }
+              /inet / && iface !~ /^(lo|docker|br-|veth|eth|en|wl)/ {
+                split($2,a,"/"); print iface " " a[1]; exit
+              }' 2>/dev/null || true)"
+            if [ -n "$VPN_DATA" ]; then
+              VPN_IFACE=$(echo "$VPN_DATA" | awk '{print $1}')
+              VPN_IP=$(echo "$VPN_DATA" | awk '{print $2}')
+            else
+              VPN_IP="$(ip -4 addr 2>/dev/null | grep -oP '(?<=inet\s)10\.0\.0\.\d+' | head -1 || true)"
+              [ -n "$VPN_IP" ] && VPN_IFACE="(10.0.0.0/24)"
+            fi
+          fi
+          printf "\\033[1m[INFO]\\033[0m local:  http://localhost:{{.FRONTEND_PORT}} (frontend)\\n"
+          printf "\\033[1m[INFO]\\033[0m local:  http://localhost:{{.BACKEND_PORT}} (backend)\\n"
+          if [ -n "$VPN_IP" ]; then
+            printf "\\033[1m[INFO]\\033[0m vpn:    http://%s:{{.FRONTEND_PORT}} (frontend) [%s]\\n" "$VPN_IP" "$VPN_IFACE"
+            printf "\\033[1m[INFO]\\033[0m vpn:    http://%s:{{.BACKEND_PORT}} (backend)  [%s]\\n" "$VPN_IP" "$VPN_IFACE"
+          else
+            printf "\\033[1m[INFO]\\033[0m vpn:    niet beschikbaar\\n"
+          fi
+        platforms: [linux, darwin]
+      - cmd: |
+          $localFrontend = "http://localhost:{{.FRONTEND_PORT}}"
+          $localBackend = "http://localhost:{{.BACKEND_PORT}}"
+          Write-Host "[INFO] local: $localFrontend (frontend)"
+          Write-Host "[INFO] local: $localBackend (backend)"
+          $vpnIp = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
+            $_.IPAddress -match '^10\.0\.0\.' -and $_.InterfaceAlias -notmatch 'Loopback|vEthernet'
+          } | Select-Object -First 1 -ExpandProperty IPAddress)
+          if ($vpnIp) {
+            Write-Host "[INFO] vpn:   http://${vpnIp}:{{.FRONTEND_PORT}} (frontend)"
+            Write-Host "[INFO] vpn:   http://${vpnIp}:{{.BACKEND_PORT}} (backend)"
+          } else {
+            Write-Host "[INFO] vpn:   niet beschikbaar"
+          }
+        platforms: [windows]
+
+  _show-prod-endpoints:
+    internal: true
+    silent: true
+    cmds:
+      - cmd: |
+          VPN_IP="{{.VPN_IP}}"
+          VPN_IFACE=""
+          if [ -n "$VPN_IP" ]; then
+            VPN_IFACE="(manueel)"
+          else
+            VPN_DATA="$(ip -4 addr 2>/dev/null | awk '
+              /^[0-9]+:/ { iface=$2; sub(/:$/,"",iface) }
+              /inet / && iface !~ /^(lo|docker|br-|veth|eth|en|wl)/ {
+                split($2,a,"/"); print iface " " a[1]; exit
+              }' 2>/dev/null || true)"
+            if [ -n "$VPN_DATA" ]; then
+              VPN_IFACE=$(echo "$VPN_DATA" | awk '{print $1}')
+              VPN_IP=$(echo "$VPN_DATA" | awk '{print $2}')
+            else
+              VPN_IP="$(ip -4 addr 2>/dev/null | grep -oP '(?<=inet\s)10\.0\.0\.\d+' | head -1 || true)"
+              [ -n "$VPN_IP" ] && VPN_IFACE="(10.0.0.0/24)"
+            fi
+          fi
+          printf "\\033[1m[INFO]\\033[0m prod local:  http://localhost:{{.PROD_FRONTEND_PORT}} (frontend)\\n"
+          printf "\\033[1m[INFO]\\033[0m prod local:  http://localhost:{{.PROD_BACKEND_PORT}} (backend)\\n"
+          if [ -n "$VPN_IP" ]; then
+            printf "\\033[1m[INFO]\\033[0m prod vpn:    http://%s:{{.PROD_FRONTEND_PORT}} (frontend) [%s]\\n" "$VPN_IP" "$VPN_IFACE"
+            printf "\\033[1m[INFO]\\033[0m prod vpn:    http://%s:{{.PROD_BACKEND_PORT}} (backend)  [%s]\\n" "$VPN_IP" "$VPN_IFACE"
+          else
+            printf "\\033[1m[INFO]\\033[0m prod vpn:    niet beschikbaar\\n"
+          fi
+        platforms: [linux, darwin]
+      - cmd: |
+          $localFrontend = "http://localhost:{{.PROD_FRONTEND_PORT}}"
+          $localBackend = "http://localhost:{{.PROD_BACKEND_PORT}}"
+          Write-Host "[INFO] prod local: $localFrontend (frontend)"
+          Write-Host "[INFO] prod local: $localBackend (backend)"
+          $vpnIp = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
+            $_.IPAddress -match '^10\.0\.0\.' -and $_.InterfaceAlias -notmatch 'Loopback|vEthernet'
+          } | Select-Object -First 1 -ExpandProperty IPAddress)
+          if ($vpnIp) {
+            Write-Host "[INFO] prod vpn:   http://${vpnIp}:{{.PROD_FRONTEND_PORT}} (frontend)"
+            Write-Host "[INFO] prod vpn:   http://${vpnIp}:{{.PROD_BACKEND_PORT}} (backend)"
+          } else {
+            Write-Host "[INFO] prod vpn:   niet beschikbaar"
+          }
+        platforms: [windows]

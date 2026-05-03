@@ -1,0 +1,651 @@
+version: '3'
+silent: true
+
+vars:
+  APP_NAME: bingel-doelenbewaking
+  FRONTEND_DIR: frontend
+  BACKEND_DIR: .
+  RUNTIME_DIR: .task
+  LOGS_DIR: .task/logs
+  PIDS_DIR: .task/pids
+  BACKUPS_DIR: .task/backups
+  FRONTEND_PID_FILE: '{{.PIDS_DIR}}/frontend.pid'
+  BACKEND_PID_FILE: '{{.PIDS_DIR}}/backend.pid'
+  FRONTEND_LOG_FILE: '{{.LOGS_DIR}}/frontend.log'
+  BACKEND_LOG_FILE: '{{.LOGS_DIR}}/backend.log'
+  FRONTEND_DEV_PORT:
+    sh: python3 -c 'import json; print(json.load(open("ports.json"))["standard_development"]["frontend"])'
+  FRONTEND_PROD_PORT:
+    sh: python3 -c 'import json; print(json.load(open("ports.json"))["standard_production"]["frontend"])'
+  BACKEND_DEV_PORT:
+    sh: python3 -c 'import json; print(json.load(open("ports.json"))["standard_development"]["backend"])'
+  BACKEND_PROD_PORT:
+    sh: python3 -c 'import json; print(json.load(open("ports.json"))["standard_production"]["backend"])'
+  DATABASE_DEV_PORT:
+    sh: python3 -c 'import json; print(json.load(open("ports.json"))["database"]["dev_terminal"])'
+  VPN_INTERFACE:
+    sh: |
+      if command -v ip >/dev/null 2>&1; then
+        ip -4 -o addr show up | while read -r _ iface _ cidr _; do
+          ip_addr="${cidr%/*}"
+          case "$iface" in
+            lo|docker*|br-*|veth*|virbr*|podman*) continue ;;
+          esac
+          case "$ip_addr" in
+            10.0.0.*)
+              printf "%s" "$iface"
+              exit 0
+              ;;
+          esac
+        done
+      fi
+  VPN_IP:
+    sh: |
+      if command -v ip >/dev/null 2>&1; then
+        VPN_IP="$(
+          ip -4 -o addr show up | while read -r _ iface _ cidr _; do
+            ip_addr="${cidr%/*}"
+            case "$iface" in
+              lo|docker*|br-*|veth*|virbr*|podman*) continue ;;
+            esac
+            case "$ip_addr" in
+              10.0.0.*)
+                printf "%s" "$ip_addr"
+                exit 0
+                ;;
+            esac
+          done
+        )"
+        if [ -n "$VPN_IP" ]; then
+          printf "%s" "$VPN_IP"
+        else
+          for iface in wg0 tun0 tailscale0; do
+            VPN_IP="$(ip -4 addr show dev "$iface" 2>/dev/null | awk "/inet / {print \\$2}" | cut -d/ -f1)"
+            if [ -n "$VPN_IP" ]; then
+              printf "%s" "$VPN_IP"
+              exit 0
+            fi
+          done
+        fi
+      fi
+  VPN_DISPLAY:
+    sh: |
+      VPN_INTERFACE="{{.VPN_INTERFACE}}"
+      VPN_IP="{{.VPN_IP}}"
+      if [ -n "$VPN_IP" ]; then
+        if [ -n "$VPN_INTERFACE" ]; then
+          printf "%s (%s)" "$VPN_INTERFACE" "$VPN_IP"
+        else
+          printf "%s" "$VPN_IP"
+        fi
+      else
+        printf "niet beschikbaar"
+      fi
+  COMPOSE_FILE:
+    sh: |
+      for file in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+        if [ -f "$file" ]; then
+          printf "%s" "$file"
+          exit 0
+        fi
+      done
+
+tasks:
+  help:
+    desc: Toon overzicht van de lifecycle en projecttaken
+    silent: false
+    cmds:
+      - |
+        printf "\n%s\n\n" "{{.APP_NAME}}"
+        printf "Lifecycle\n"
+        printf "  task setup              Installeer dependencies en controleer tooling\n"
+        printf "  task start              Start frontend dev + backend scheduler\n"
+        printf "  task stop               Stop frontend dev + backend scheduler\n"
+        printf "  task restart            Herstart frontend dev + backend scheduler\n"
+        printf "  task status             Toon status, endpoints en backend status\n"
+        printf "  task logs:tail          Volg frontend- en backendlogs\n"
+        printf "\nDevelopment\n"
+        printf "  task start:frontend     Start alleen de Next.js frontend\n"
+        printf "  task start:backend      Start alleen de Python scheduler\n"
+        printf "  task sync -- --van ...  Voer een Bingel sync uit\n"
+        printf "  task migrate            Draai Alembic migraties\n"
+        printf "  task ports              Toon calcport-poorten\n"
+        printf "\nQuality\n"
+        printf "  task test               Draai backend tests en optionele frontend tests\n"
+        printf "  task lint               Draai lint als tooling aanwezig is\n"
+        printf "  task format             Format code als tooling aanwezig is\n"
+        printf "  task build              Bouw frontend en doe backend smoke build\n"
+        printf "\nDocker\n"
+        printf "  task docker:up          Start compose als een compose-file bestaat\n"
+        printf "  task docker:logs        Volg compose logs\n"
+        printf "\n"
+
+  setup:
+    desc: Installeer dependencies, controleer tooling en bereid runtime directories voor
+    cmds:
+      - task: _ensure:dirs
+      - task: install
+      - task: doctor
+
+  install:
+    desc: Installeer backend en frontend dependencies
+    cmds:
+      - task: install:backend
+      - task: install:frontend
+
+  install:backend:
+    desc: Installeer of synchroniseer Python dependencies via uv
+    cmds:
+      - task: _show:context
+      - cmd: uv sync
+
+  install:frontend:
+    desc: Installeer frontend dependencies via fnm en pnpm
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - task: _show:frontend:dev
+      - cmd: fnm use --version-file-strategy=recursive
+      - cmd: pnpm install
+
+  uninstall:
+    desc: Verwijder frontend dependencies en lokale runtime artefacten
+    cmds:
+      - task: stop
+      - cmd: rm -rf '{{.FRONTEND_DIR}}/node_modules' '{{.RUNTIME_DIR}}'
+
+  setup:ssh-key:
+    desc: Toon SSH key setup-instructies voor Git toegang
+    silent: false
+    cmds:
+      - |
+        printf "Controleer bestaande keys in ~/.ssh\n"
+        printf "Maak indien nodig een nieuwe key aan:\n"
+        printf "  ssh-keygen -t ed25519 -C \"you@example.com\"\n"
+        printf "Voeg daarna ~/.ssh/id_ed25519.pub toe aan je Git provider en test met:\n"
+        printf "  ssh -T git@github.com\n"
+
+  dev:setup:
+    desc: Voer setup uit en start de lokale services
+    cmds:
+      - task: setup
+      - task: start
+
+  setup:quick:
+    desc: Installeer dependencies zonder doctor-check
+    cmds:
+      - task: _ensure:dirs
+      - task: install
+
+  doctor:
+    desc: Controleer vereiste tooling en projectbestanden
+    silent: false
+    cmds:
+      - |
+        MISSING=""
+        command -v task >/dev/null 2>&1 || MISSING="$MISSING task"
+        command -v uv >/dev/null 2>&1 || MISSING="$MISSING uv"
+        command -v python3 >/dev/null 2>&1 || MISSING="$MISSING python3"
+        command -v fnm >/dev/null 2>&1 || MISSING="$MISSING fnm"
+        command -v pnpm >/dev/null 2>&1 || MISSING="$MISSING pnpm"
+        command -v calcport >/dev/null 2>&1 || MISSING="$MISSING calcport"
+        command -v lsof >/dev/null 2>&1 || MISSING="$MISSING lsof"
+        if [ -n "$MISSING" ]; then
+          printf "Ontbrekende tools:%s\n" "$MISSING"
+          exit 1
+        fi
+        test -f pyproject.toml
+        test -f frontend/package.json
+        test -f ports.json
+        printf "Tooling en basisbestanden OK\n"
+
+  start:
+    desc: Start frontend development en backend scheduler
+    silent: false
+    cmds:
+      - task: _ensure:dirs
+      - task: start:backend
+      - task: start:frontend
+
+  stop:
+    desc: Stop frontend development en backend scheduler
+    silent: false
+    cmds:
+      - task: stop:frontend
+      - task: stop:backend
+
+  restart:
+    desc: Herstart frontend development en backend scheduler
+    silent: false
+    cmds:
+      - task: stop
+      - task: start
+      - task: _show:endpoints
+
+  serve:
+    desc: Start de frontend in production mode en de backend scheduler lokaal
+    silent: false
+    cmds:
+      - task: _ensure:dirs
+      - task: stop
+      - task: start:backend
+      - task: _start:frontend:prod
+      - task: _show:endpoints:prod
+
+  start:prod:
+    desc: Start Docker Compose als beschikbaar, anders lokale serve-flow
+    silent: false
+    cmds:
+      - |
+        if [ -n "{{.COMPOSE_FILE}}" ]; then
+          task docker:up
+        else
+          task serve
+        fi
+
+  start:frontend:
+    desc: Start alleen de Next.js frontend in development
+    silent: false
+    cmds:
+      - task: _ensure:dirs
+      - task: _start:frontend:dev
+      - task: _show:endpoints
+
+  stop:frontend:
+    desc: Stop alleen de frontend
+    silent: false
+    cmds:
+      - task: _stop:service
+        vars:
+          PID_FILE: '{{.FRONTEND_PID_FILE}}'
+          PORT: '{{.FRONTEND_DEV_PORT}}'
+          LABEL: frontend
+
+  restart:frontend:
+    desc: Herstart alleen de frontend
+    silent: false
+    cmds:
+      - task: stop:frontend
+      - task: start:frontend
+
+  start:backend:
+    desc: Start alleen de Python scheduler
+    silent: false
+    cmds:
+      - task: _ensure:dirs
+      - task: _start:backend
+      - task: _show:endpoints
+
+  stop:backend:
+    desc: Stop alleen de backend scheduler
+    silent: false
+    cmds:
+      - task: _stop:service
+        vars:
+          PID_FILE: '{{.BACKEND_PID_FILE}}'
+          PORT: '{{.BACKEND_DEV_PORT}}'
+          LABEL: backend scheduler
+
+  restart:backend:
+    desc: Herstart alleen de backend scheduler
+    silent: false
+    cmds:
+      - task: stop:backend
+      - task: start:backend
+
+  status:
+    desc: Toon service-status, frontend endpoints en backend sync-status
+    silent: false
+    cmds:
+      - task: _show:context
+      - task: _status:service
+        vars:
+          PID_FILE: '{{.FRONTEND_PID_FILE}}'
+          PORT: '{{.FRONTEND_DEV_PORT}}'
+          LABEL: frontend
+      - task: _status:service
+        vars:
+          PID_FILE: '{{.BACKEND_PID_FILE}}'
+          PORT: '{{.BACKEND_DEV_PORT}}'
+          LABEL: backend scheduler
+      - task: _show:endpoints
+      - |
+        if [ -f .env ]; then
+          uv run python cli.py status || true
+        else
+          printf "Backend status overgeslagen: .env ontbreekt\n"
+        fi
+
+  logs:
+    desc: Toon de meest recente frontend- en backendlogs
+    silent: false
+    cmds:
+      - task: logs:frontend
+      - task: logs:backend
+
+  logs:frontend:
+    desc: Toon de meest recente frontendlogs
+    silent: false
+    cmds:
+      - task: _ensure:dirs
+      - cmd: touch '{{.FRONTEND_LOG_FILE}}'
+      - cmd: tail -n 80 '{{.FRONTEND_LOG_FILE}}'
+
+  logs:backend:
+    desc: Toon de meest recente backendlogs
+    silent: false
+    cmds:
+      - task: _ensure:dirs
+      - cmd: touch '{{.BACKEND_LOG_FILE}}'
+      - cmd: tail -n 80 '{{.BACKEND_LOG_FILE}}'
+
+  logs:tail:
+    desc: Volg frontend- en backendlogs live
+    silent: false
+    cmds:
+      - task: _ensure:dirs
+      - cmd: touch '{{.FRONTEND_LOG_FILE}}' '{{.BACKEND_LOG_FILE}}'
+      - cmd: tail -f '{{.FRONTEND_LOG_FILE}}' '{{.BACKEND_LOG_FILE}}'
+
+  ports:
+    desc: Toon calcport-poorten voor dit project
+    silent: false
+    cmds:
+      - task: _show:context
+      - cmd: calcport
+
+  sync:
+    desc: Voer een Bingel sync uit
+    silent: false
+    cmds:
+      - task: _show:context
+      - cmd: uv run python cli.py sync {{.CLI_ARGS}}
+
+  migrate:
+    desc: Draai Alembic migraties
+    silent: false
+    cmds:
+      - task: _show:context
+      - cmd: uv run alembic upgrade head
+
+  backup:config:
+    desc: Maak een timestamped backup van .env-bestanden
+    silent: false
+    cmds:
+      - task: _ensure:dirs
+      - |
+        STAMP="$(date +%Y%m%d-%H%M%S)"
+        TARGET="{{.BACKUPS_DIR}}/config-$STAMP"
+        mkdir -p "$TARGET"
+        for file in .env .env.local frontend/.env.local; do
+          if [ -f "$file" ]; then
+            cp "$file" "$TARGET/"
+          fi
+        done
+        printf "Backup opgeslagen in %s\n" "$TARGET"
+
+  db:backup:
+    desc: Maak een PostgreSQL backup als pg_dump en DATABASE_URL beschikbaar zijn
+    silent: false
+    cmds:
+      - task: _ensure:dirs
+      - |
+        if ! command -v pg_dump >/dev/null 2>&1; then
+          printf "pg_dump ontbreekt\n"
+          exit 1
+        fi
+        if [ -z "${DATABASE_URL:-}" ]; then
+          printf "DATABASE_URL ontbreekt in de omgeving\n"
+          exit 1
+        fi
+        STAMP="$(date +%Y%m%d-%H%M%S)"
+        TARGET="{{.BACKUPS_DIR}}/db-$STAMP.sql"
+        pg_dump "$DATABASE_URL" > "$TARGET"
+        printf "Databasebackup opgeslagen in %s\n" "$TARGET"
+
+  clean:
+    desc: Verwijder runtime artefacten
+    cmds:
+      - task: stop
+      - cmd: rm -rf '{{.PIDS_DIR}}'
+
+  clean:cache:
+    desc: Verwijder caches en build-artefacten
+    cmds:
+      - cmd: rm -rf .pytest_cache .mypy_cache .ruff_cache '{{.FRONTEND_DIR}}/.next' '{{.FRONTEND_DIR}}/coverage' '{{.FRONTEND_DIR}}/dist'
+
+  clean:logs:
+    desc: Verwijder logbestanden
+    cmds:
+      - cmd: rm -rf '{{.LOGS_DIR}}'
+
+  clean:venv:
+    desc: Verwijder de lokale Python virtualenv
+    cmds:
+      - cmd: rm -rf .venv
+
+  clean:all:
+    desc: Verwijder dependencies, runtime artefacten en caches
+    cmds:
+      - task: clean
+      - task: clean:cache
+      - task: clean:logs
+      - cmd: rm -rf '{{.FRONTEND_DIR}}/node_modules'
+
+  clean:full:
+    desc: Volledige reset inclusief Docker compose artifacts indien beschikbaar
+    cmds:
+      - task: clean:all
+      - |
+        if [ -n "{{.COMPOSE_FILE}}" ]; then
+          docker compose -f '{{.COMPOSE_FILE}}' down -v --remove-orphans
+        fi
+
+  docker:build:
+    desc: Build Docker images als een compose-file aanwezig is
+    silent: false
+    cmds:
+      - task: _require:compose
+      - cmd: docker compose -f '{{.COMPOSE_FILE}}' build
+
+  docker:up:
+    desc: Start Docker Compose als een compose-file aanwezig is
+    silent: false
+    cmds:
+      - task: _require:compose
+      - cmd: docker compose -f '{{.COMPOSE_FILE}}' up -d
+      - task: _show:endpoints:prod
+
+  docker:down:
+    desc: Stop Docker Compose als een compose-file aanwezig is
+    silent: false
+    cmds:
+      - task: _require:compose
+      - cmd: docker compose -f '{{.COMPOSE_FILE}}' down --remove-orphans
+
+  docker:logs:
+    desc: Toon Docker Compose logs als een compose-file aanwezig is
+    silent: false
+    cmds:
+      - task: _require:compose
+      - cmd: docker compose -f '{{.COMPOSE_FILE}}' logs -f
+
+  docker:rebuild:
+    desc: Rebuild Docker Compose als een compose-file aanwezig is
+    silent: false
+    cmds:
+      - task: _require:compose
+      - cmd: docker compose -f '{{.COMPOSE_FILE}}' up -d --build
+      - task: _show:endpoints:prod
+
+  docker:shell:
+    desc: Open een shell in de backend container als een compose-file aanwezig is
+    silent: false
+    cmds:
+      - task: _require:compose
+      - |
+        docker compose -f '{{.COMPOSE_FILE}}' exec backend sh || \
+        docker compose -f '{{.COMPOSE_FILE}}' exec backend bash
+
+  _ensure:dirs:
+    internal: true
+    cmds:
+      - cmd: mkdir -p '{{.RUNTIME_DIR}}' '{{.LOGS_DIR}}' '{{.PIDS_DIR}}' '{{.BACKUPS_DIR}}'
+
+  _show:context:
+    internal: true
+    silent: true
+    cmds:
+      - cmd: 'echo "wg0 VPN IP: {{.VPN_DISPLAY}}"'
+      - cmd: 'echo "Calcport frontend dev: {{.FRONTEND_DEV_PORT}} | frontend prod: {{.FRONTEND_PROD_PORT}} | backend dev: {{.BACKEND_DEV_PORT}} | db dev: {{.DATABASE_DEV_PORT}}"'
+
+  _show:frontend:dev:
+    internal: true
+    silent: true
+    cmds:
+      - task: _show:context
+      - task: _show:endpoints
+
+  _start:frontend:dev:
+    internal: true
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - task: _stop:service
+        vars:
+          PID_FILE: '{{.FRONTEND_PID_FILE}}'
+          PORT: '{{.FRONTEND_DEV_PORT}}'
+          LABEL: frontend
+      - cmd: fnm use --version-file-strategy=recursive
+      - |
+        setsid pnpm exec next dev --hostname 0.0.0.0 --port {{.FRONTEND_DEV_PORT}} > ../{{.FRONTEND_LOG_FILE}} 2>&1 < /dev/null &
+        sleep 2
+        PID="$(lsof -ti:{{.FRONTEND_DEV_PORT}} 2>/dev/null | head -n 1)"
+        if [ -z "$PID" ] && command -v ss >/dev/null 2>&1; then
+          PID="$(ss -ltnp 'sport = :{{.FRONTEND_DEV_PORT}}' 2>/dev/null | sed -nE 's/.*pid=([0-9]+).*/\1/p' | head -n 1)"
+        fi
+        printf "%s\n" "$PID" > ../{{.FRONTEND_PID_FILE}}
+
+  _start:frontend:prod:
+    internal: true
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - task: _stop:service
+        vars:
+          PID_FILE: '{{.FRONTEND_PID_FILE}}'
+          PORT: '{{.FRONTEND_PROD_PORT}}'
+          LABEL: frontend
+      - cmd: fnm use --version-file-strategy=recursive
+      - |
+        setsid pnpm exec next start --hostname 0.0.0.0 --port {{.FRONTEND_PROD_PORT}} > ../{{.FRONTEND_LOG_FILE}} 2>&1 < /dev/null &
+        sleep 2
+        PID="$(lsof -ti:{{.FRONTEND_PROD_PORT}} 2>/dev/null | head -n 1)"
+        if [ -z "$PID" ] && command -v ss >/dev/null 2>&1; then
+          PID="$(ss -ltnp 'sport = :{{.FRONTEND_PROD_PORT}}' 2>/dev/null | sed -nE 's/.*pid=([0-9]+).*/\1/p' | head -n 1)"
+        fi
+        printf "%s\n" "$PID" > ../{{.FRONTEND_PID_FILE}}
+
+  _start:backend:
+    internal: true
+    cmds:
+      - task: _stop:service
+        vars:
+          PID_FILE: '{{.BACKEND_PID_FILE}}'
+          PORT: '{{.BACKEND_DEV_PORT}}'
+          LABEL: backend scheduler
+      - |
+        setsid uv run python cli.py scheduler > {{.BACKEND_LOG_FILE}} 2>&1 < /dev/null &
+        sleep 2
+        pgrep -n -f 'cli.py scheduler' > {{.BACKEND_PID_FILE}} || true
+
+  _stop:service:
+    internal: true
+    silent: true
+    cmds:
+      - |
+        if [ -f "{{.PID_FILE}}" ]; then
+          PID="$(cat "{{.PID_FILE}}")"
+          if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+            PGID="$(ps -o pgid= -p "$PID" 2>/dev/null | tr -d ' ')"
+            if [ -n "$PGID" ] && [ "{{.LABEL}}" = "frontend" ]; then
+              pkill -TERM -g "$PGID" 2>/dev/null || true
+              sleep 1
+              kill -0 "$PID" 2>/dev/null && pkill -KILL -g "$PGID" 2>/dev/null || true
+            else
+              kill "$PID" 2>/dev/null || true
+              sleep 1
+              kill -0 "$PID" 2>/dev/null && kill -KILL "$PID" 2>/dev/null || true
+            fi
+            printf "%s gestopt (PID %s)\n" "{{.LABEL}}" "$PID"
+          fi
+          rm -f "{{.PID_FILE}}"
+        fi
+        if [ -n "{{.PORT}}" ]; then
+          PID="$(lsof -ti:{{.PORT}} 2>/dev/null | head -n 1)"
+          if [ -z "$PID" ] && command -v ss >/dev/null 2>&1; then
+            PID="$(ss -ltnp 'sport = :{{.PORT}}' 2>/dev/null | sed -nE 's/.*pid=([0-9]+).*/\1/p' | head -n 1)"
+          fi
+          if [ -n "$PID" ]; then
+            PGID="$(ps -o pgid= -p "$PID" 2>/dev/null | tr -d ' ')"
+            if [ -n "$PGID" ] && [ "{{.LABEL}}" = "frontend" ]; then
+              pkill -TERM -g "$PGID" 2>/dev/null || true
+              sleep 1
+              kill -0 "$PID" 2>/dev/null && pkill -KILL -g "$PGID" 2>/dev/null || true
+            else
+              kill "$PID" 2>/dev/null || true
+              sleep 1
+              kill -0 "$PID" 2>/dev/null && kill -KILL "$PID" 2>/dev/null || true
+            fi
+            printf "%s gestopt via poort %s\n" "{{.LABEL}}" "{{.PORT}}"
+          fi
+        fi
+
+  _status:service:
+    internal: true
+    silent: false
+    cmds:
+      - |
+        PID=""
+        if [ -f "{{.PID_FILE}}" ]; then
+          PID="$(cat "{{.PID_FILE}}")"
+        fi
+        if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+          printf "%s: running (PID %s)\n" "{{.LABEL}}" "$PID"
+        elif [ -n "{{.PORT}}" ] && { lsof -ti:{{.PORT}} >/dev/null 2>&1 || ss -ltnp 'sport = :{{.PORT}}' 2>/dev/null | grep -q 'pid='; }; then
+          printf "%s: running op poort %s (niet via task gestart)\n" "{{.LABEL}}" "{{.PORT}}"
+        else
+          printf "%s: stopped\n" "{{.LABEL}}"
+        fi
+
+  _show:endpoints:
+    internal: true
+    silent: false
+    cmds:
+      - |
+        printf "Frontend lokaal: http://localhost:%s\n" "{{.FRONTEND_DEV_PORT}}"
+        if [ -n "{{.VPN_IP}}" ]; then
+          printf "Frontend via VPN: http://%s:%s\n" "{{.VPN_IP}}" "{{.FRONTEND_DEV_PORT}}"
+        else
+          printf "Frontend via VPN: niet beschikbaar\n"
+        fi
+        printf "Backend scheduler: actief zonder HTTP-endpoint | gereserveerde calcport: %s\n" "{{.BACKEND_DEV_PORT}}"
+
+  _show:endpoints:prod:
+    internal: true
+    silent: false
+    cmds:
+      - |
+        printf "Frontend lokaal: http://localhost:%s\n" "{{.FRONTEND_PROD_PORT}}"
+        if [ -n "{{.VPN_IP}}" ]; then
+          printf "Frontend via VPN: http://%s:%s\n" "{{.VPN_IP}}" "{{.FRONTEND_PROD_PORT}}"
+        else
+          printf "Frontend via VPN: niet beschikbaar\n"
+        fi
+        printf "Backend scheduler: actief zonder HTTP-endpoint | gereserveerde calcport: %s\n" "{{.BACKEND_PROD_PORT}}"
+
+  _require:compose:
+    internal: true
+    cmds:
+      - |
+        if [ -z "{{.COMPOSE_FILE}}" ]; then
+          printf "Geen docker compose-file gevonden in de repo\n"
+          exit 1
+        fi

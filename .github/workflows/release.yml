@@ -1,0 +1,90 @@
+# Trigger: push van tag in formaat <skill-name>-v<X.Y.Z>
+# Bv: git tag taskfiles-v1.1.0 && git push origin taskfiles-v1.1.0
+#
+# Wat dit doet:
+#   1. Parse tag → skill-naam + versie
+#   2. Verifieer dat skill-folder bestaat en SKILL.md de juiste versie heeft
+#   3. Bouw tarball van die skill-folder
+#   4. Upload tarball naar GitHub Release
+name: Release skill
+
+on:
+  push:
+    tags:
+      - '*-v*.*.*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse tag
+        id: parse
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          SKILL="${TAG%-v*}"
+          VERSION="${TAG##*-v}"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "skill=$SKILL"     >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Parsed: skill=$SKILL version=$VERSION"
+
+      - name: Verify skill exists
+        run: |
+          if [ ! -d "${{ steps.parse.outputs.skill }}" ]; then
+            echo "::error::Skill folder '${{ steps.parse.outputs.skill }}' niet gevonden"
+            exit 1
+          fi
+          if [ ! -f "${{ steps.parse.outputs.skill }}/SKILL.md" ]; then
+            echo "::error::SKILL.md ontbreekt in ${{ steps.parse.outputs.skill }}/"
+            exit 1
+          fi
+
+      - name: Verify version match
+        run: |
+          DECLARED=$(grep '^version:' "${{ steps.parse.outputs.skill }}/SKILL.md" | head -1 | awk '{print $2}')
+          if [ "$DECLARED" != "${{ steps.parse.outputs.version }}" ]; then
+            echo "::error::Tag-versie ${{ steps.parse.outputs.version }} ≠ SKILL.md versie $DECLARED"
+            exit 1
+          fi
+          echo "Versie OK: $DECLARED"
+
+      - name: Build tarball
+        run: |
+          tar czf "${{ steps.parse.outputs.skill }}.tar.gz" \
+            --exclude='.git' \
+            --exclude='*.legacy.md' \
+            "${{ steps.parse.outputs.skill }}/"
+          ls -la *.tar.gz
+
+      - name: Extract changelog entry
+        id: changelog
+        run: |
+          CHANGELOG="${{ steps.parse.outputs.skill }}/CHANGELOG.md"
+          if [ -f "$CHANGELOG" ]; then
+            awk -v v="${{ steps.parse.outputs.version }}" '
+              /^## \[/ {
+                if (found) exit
+                if ($0 ~ "\\[" v "\\]") found=1
+                next
+              }
+              found { print }
+            ' "$CHANGELOG" > release-notes.md
+          else
+            echo "Geen CHANGELOG.md gevonden voor ${{ steps.parse.outputs.skill }}" > release-notes.md
+          fi
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.parse.outputs.tag }}
+          name: ${{ steps.parse.outputs.skill }} v${{ steps.parse.outputs.version }}
+          body_path: release-notes.md
+          files: ${{ steps.parse.outputs.skill }}.tar.gz
+          draft: false
+          prerelease: false

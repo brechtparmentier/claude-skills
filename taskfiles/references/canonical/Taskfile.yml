@@ -1,0 +1,217 @@
+# Taskfile.yml — nextjs_frontend-gdriverights
+# Structuur:
+#   Taskfile.yml            root — lifecycle wrappers + help
+#   taskfiles/core.yml      generieke infra: setup, doctor, clean, logs
+#   taskfiles/project.yml   projectspecifiek: build, lint, test, format
+version: '3'
+silent: true
+dotenv: ['.env', '.env.local']
+
+includes:
+  core:
+    taskfile: ./taskfiles/core.yml
+    optional: false
+  project:
+    taskfile: ./taskfiles/project.yml
+    optional: false
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Lifecycle wrappers — delegeert naar core + project
+# ──────────────────────────────────────────────────────────────────────────────
+tasks:
+  default:
+    desc: Toon help
+    silent: false
+    cmds: [task: core:help]
+
+  help:
+    desc: Toon beschikbare commando's
+    silent: false
+    cmds: [task: core:help]
+
+  install:
+    desc: Install dependencies
+    cmds: [task: core:install]
+
+  setup:
+    desc: Bootstrap dependencies + health-check
+    cmds: [task: core:setup]
+
+  setup-quick:
+    desc: Snelle setup (alleen install)
+    cmds: [task: core:setup-quick]
+
+  dev-setup:
+    desc: Volledige developer setup
+    cmds: [task: core:dev-setup]
+
+  doctor:
+    desc: Health-check (vereiste tools aanwezig?)
+    cmds: [task: core:doctor]
+
+  uninstall:
+    desc: Verwijder node_modules en caches
+    cmds: [task: core:uninstall]
+
+  start:
+    desc: Start development server
+    cmds: [task: core:start]
+
+  start-frontend:
+    desc: Start frontend development server
+    cmds: [task: core:start]
+
+  start-prod:
+    desc: Start productie server
+    cmds: [task: core:start-prod]
+
+  stop:
+    desc: Stop alle services
+    cmds: [task: core:stop]
+
+  stop-frontend:
+    desc: Stop frontend services
+    cmds: [task: core:stop]
+
+  restart:
+    desc: Herstart development server
+    cmds: [task: core:restart]
+
+  restart-frontend:
+    desc: Herstart frontend development server
+    cmds: [task: core:restart]
+
+  serve:
+    desc: Alias voor start
+    cmds: [task: core:start]
+
+  status:
+    desc: Service status
+    cmds: [task: core:status]
+
+  logs:
+    desc: Volg development logs
+    cmds: [task: core:logs]
+
+  logs-frontend:
+    desc: Volg frontend development logs
+    cmds: [task: core:logs]
+
+  logs:tail:
+    desc: Volg logs (laatste 50 regels + follow)
+    cmds: [task: core:logs-tail]
+
+  clean:
+    desc: Verwijder build-artefacten
+    cmds: [task: core:clean]
+
+  clean:cache:
+    desc: Verwijder caches (.next, .turbo)
+    cmds: [task: core:clean-cache]
+
+  clean:all:
+    desc: Verwijder alles (node_modules + artefacten)
+    cmds: [task: core:clean-all]
+
+  clean:full:
+    desc: Alias voor clean:all
+    cmds: [task: core:clean-all]
+
+  clean:logs:
+    desc: Verwijder logbestanden
+    cmds: [task: core:clean-logs]
+
+  backup-config:
+    desc: Backup configuratiebestanden
+    cmds: [task: core:backup-config]
+
+  test:
+    desc: Run tests
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:test
+
+  lint:
+    desc: Lint code
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:lint
+
+  lint:fix:
+    desc: Auto-fix lint issues
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:lint-fix
+
+  format:
+    desc: Format code met Prettier
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:format
+
+  format:check:
+    desc: Controleer formatting zonder wijzigingen
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:format-check
+
+  type-check:
+    desc: Voer TypeScript type-check uit
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:type-check
+
+  check:
+    desc: Draai lint, type-check en format-check
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:check
+
+  test:coverage:
+    desc: Run tests met coverage
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:test-coverage
+
+  test:watch:
+    desc: Run tests in watch mode
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:test-watch
+
+  test:e2e:
+    desc: Run end-to-end tests
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:test-e2e
+
+  build:
+    desc: Build voor productie
+    cmds:
+      - task: core:_ensure-ready
+      - task: project:build
+
+  # ── Docker ────────────────────────────────────────────────────────────────
+  docker:build:
+    desc: Build Docker image
+    cmds: [task: core:docker-build]
+
+  docker:up:
+    desc: Start Docker containers
+    cmds: [task: core:docker-up]
+
+  docker:down:
+    desc: Stop Docker containers
+    cmds: [task: core:docker-down]
+
+  docker:logs:
+    desc: Volg Docker logs
+    cmds: [task: core:docker-logs]
+
+  docker:rebuild:
+    desc: Rebuild en herstart Docker containers
+    cmds: [task: core:docker-rebuild]
+
+  docker:shell:
+    desc: Open shell in Docker container
+    cmds: [task: core:docker-shell]

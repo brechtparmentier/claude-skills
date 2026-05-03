@@ -1,0 +1,9 @@
+# Chat/session history from Specstory or similar tools
+.specstory/
+
+# macOS
+.DS_Store
+
+# editor
+.vscode/
+*.swp

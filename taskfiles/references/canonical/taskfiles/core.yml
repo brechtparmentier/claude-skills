@@ -1,0 +1,774 @@
+# taskfiles/core.yml — nextjs_frontend-gdriverights
+# Generieke infra-laag: setup, lifecycle, logs, clean, docker
+version: '3'
+silent: true
+
+vars:
+  # ── Project identity ──────────────────────────────────────────────────────
+  APP_NAME: nextjs_frontend-gdriverights
+
+  # ── Tooling ───────────────────────────────────────────────────────────────
+  PKG_MANAGER: pnpm
+  INSTALL_CMD: pnpm install
+  DEV_HOST: 0.0.0.0
+  PROD_HOST: 0.0.0.0
+  DEV_CMD: 'pnpm exec next dev --turbopack --hostname {{.DEV_HOST}} --port {{.DEV_PORT}}'
+  PROD_CMD: 'pnpm exec next start --hostname {{.PROD_HOST}} --port {{.PROD_PORT}}'
+  DEV_CERT_FILE: certificates/localhost.pem
+  DEV_KEY_FILE: certificates/localhost-key.pem
+
+  # ── Runtime paden ─────────────────────────────────────────────────────────
+  RUNTIME_DIR: .taskrun
+  LOGS_DIR: .taskrun/logs
+  DEV_LOG: .taskrun/logs/dev.log
+  PROD_LOG: .taskrun/logs/prod.log
+
+  # ── Ports (uit port.config.json) ──────────────────────────────────────────
+  DEV_PORT: '44007'
+  PROD_PORT: '44008'
+  DOCKER_PORT: '3000'
+  DEV_SCHEME: https
+  PROD_SCHEME: http
+  DOCKER_SCHEME: http
+
+  # ── Docker ────────────────────────────────────────────────────────────────
+  DOCKER_SERVICE: app
+
+  # ── Timeouts ──────────────────────────────────────────────────────────────
+  START_TIMEOUT: '30'
+  STOP_TIMEOUT: '15'
+
+tasks:
+  # ════════════════════════════════════════════════════════════════════════════
+  # HELP
+  # ════════════════════════════════════════════════════════════════════════════
+  help:
+    desc: Toon overzicht van beschikbare commando's
+    silent: false
+    cmds:
+      - |
+        printf "\n\033[1;36m=== {{.APP_NAME}} ===\033[0m\n"
+        printf "\033[1mdev port:\033[0m  %s\n" "{{.DEV_PORT}}"
+        printf "\033[1mprod port:\033[0m %s\n" "{{.PROD_PORT}}"
+        printf "\n\033[1;33mLifecycle:\033[0m\n"
+        printf "  \033[32mtask setup\033[0m        bootstrap dependencies + health-check\n"
+        printf "  \033[32mtask setup-quick\033[0m  snelle setup (alleen install)\n"
+        printf "  \033[32mtask dev-setup\033[0m    volledige developer setup\n"
+        printf "  \033[32mtask start\033[0m        start development server\n"
+        printf "  \033[32mtask start-frontend\033[0m start frontend alias\n"
+        printf "  \033[32mtask start-prod\033[0m   start productie server\n"
+        printf "  \033[32mtask stop\033[0m         stop alle services\n"
+        printf "  \033[32mtask stop-frontend\033[0m stop frontend alias\n"
+        printf "  \033[32mtask restart\033[0m      herstart development server\n"
+        printf "  \033[32mtask restart-frontend\033[0m herstart frontend alias\n"
+        printf "  \033[32mtask status\033[0m       service status + endpoints\n"
+        printf "  \033[32mtask logs\033[0m         volg development logs\n"
+        printf "  \033[32mtask logs-frontend\033[0m volg frontend logs alias\n"
+        printf "\n\033[1;33mProject:\033[0m\n"
+        printf "  \033[32mtask build\033[0m          build voor productie\n"
+        printf "  \033[32mtask test\033[0m           run tests (jest)\n"
+        printf "  \033[32mtask test:watch\033[0m     tests in watch mode\n"
+        printf "  \033[32mtask test:coverage\033[0m  tests met coverage\n"
+        printf "  \033[32mtask test:e2e\033[0m       end-to-end tests (Playwright)\n"
+        printf "  \033[32mtask lint\033[0m           lint code\n"
+        printf "  \033[32mtask lint:fix\033[0m       auto-fix lint issues\n"
+        printf "  \033[32mtask format\033[0m         format code (prettier)\n"
+        printf "  \033[32mtask format:check\033[0m   check formatting\n"
+        printf "  \033[32mtask type-check\033[0m     TypeScript type-check\n"
+        printf "  \033[32mtask check\033[0m          lint + type-check + format-check\n"
+        printf "\n\033[1;33mMaintenance:\033[0m\n"
+        printf "  \033[32mtask clean\033[0m        verwijder build-artefacten\n"
+        printf "  \033[32mtask clean:cache\033[0m  verwijder caches\n"
+        printf "  \033[32mtask clean:all\033[0m    verwijder alles (node_modules + artefacten)\n"
+        printf "  \033[32mtask clean:logs\033[0m   verwijder logbestanden\n"
+        printf "  \033[32mtask uninstall\033[0m    verwijder node_modules en caches\n"
+        printf "  \033[32mtask backup-config\033[0m backup configuratiebestanden\n"
+        printf "\n\033[1;33mDocker:\033[0m\n"
+        printf "  \033[32mtask docker:build\033[0m   build Docker image\n"
+        printf "  \033[32mtask docker:up\033[0m      start containers\n"
+        printf "  \033[32mtask docker:down\033[0m    stop containers\n"
+        printf "  \033[32mtask docker:logs\033[0m    volg Docker logs\n"
+        printf "  \033[32mtask docker:rebuild\033[0m rebuild + herstart\n"
+        printf "  \033[32mtask docker:shell\033[0m   shell in container\n"
+        printf "\n"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # SETUP
+  # ════════════════════════════════════════════════════════════════════════════
+  setup:
+    desc: Install dependencies + env bootstrap + health-check
+    silent: false
+    cmds:
+      - task: _ensure-dirs
+      - task: install
+      - task: _bootstrap-env
+      - task: doctor
+      - printf "\033[32m[OK]\033[0m Setup voltooid\n"
+
+  setup-quick:
+    desc: Snelle setup (install + env bootstrap indien mogelijk)
+    cmds:
+      - task: install
+      - task: _bootstrap-env
+      - printf "\033[32m[OK]\033[0m Quick setup voltooid\n"
+
+  dev-setup:
+    desc: Volledige developer setup (install + env bootstrap + doctor + build)
+    silent: false
+    cmds:
+      - task: _ensure-dirs
+      - task: install
+      - task: _bootstrap-env
+      - task: doctor
+      - task: _build-check
+      - printf "\033[32m[OK]\033[0m Developer setup voltooid\n"
+
+  install:
+    desc: Install dependencies
+    cmds:
+      - '{{.INSTALL_CMD}}'
+
+  uninstall:
+    desc: Verwijder node_modules en caches
+    cmds:
+      - |
+        rm -rf node_modules .next .turbo 2>/dev/null || true
+        printf "\033[32m[OK]\033[0m node_modules en caches verwijderd\n"
+
+  doctor:
+    desc: Health-check (vereiste tools aanwezig?)
+    silent: false
+    cmds:
+      - |
+        _has() { command -v "$1" >/dev/null 2>&1; }
+        MISSING=""
+        WARN=""
+        _has task   || MISSING="$MISSING task"
+        _has node   || MISSING="$MISSING node"
+        _has pnpm   || MISSING="$MISSING pnpm"
+        _has docker || WARN="$WARN docker"
+        # fnm: check PATH en bekende installatiepaden
+        if _has fnm; then
+          FNM_V=$(fnm --version 2>/dev/null)
+        elif [ -x "$HOME/.local/share/fnm/fnm" ]; then
+          FNM_V=$("$HOME/.local/share/fnm/fnm" --version 2>/dev/null)
+          printf "\033[33m[WARN]\033[0m fnm gevonden in ~/.local/share/fnm/ maar niet in PATH\n"
+        else
+          WARN="$WARN fnm"
+        fi
+        if [ -n "$MISSING" ]; then
+          printf "\033[31m[ERR]\033[0m Ontbrekende tools:%s\n" "$MISSING"
+          exit 1
+        fi
+        [ -n "$WARN" ] && printf "\033[33m[WARN]\033[0m Optionele tools niet gevonden:%s\n" "$WARN"
+        NODE_V=$(node -v 2>/dev/null)
+        PNPM_V=$(pnpm -v 2>/dev/null)
+        printf "\033[32m[OK]\033[0m Vereiste tools aanwezig (node %s, pnpm %s" "$NODE_V" "$PNPM_V"
+        [ -n "$FNM_V" ] && printf ", %s" "$FNM_V"
+        printf ")\n"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # LIFECYCLE
+  # ════════════════════════════════════════════════════════════════════════════
+  start:
+    desc: Start development server
+    silent: false
+    cmds:
+      - task: _ensure-ready
+      - task: _ensure-dirs
+      - task: _kill-mode
+        vars:
+          TARGET_PORT: '{{.DEV_PORT}}'
+          PID_FILE: '{{.RUNTIME_DIR}}/dev.pid'
+      - |
+        DEV_CMD='{{.DEV_CMD}}'
+        if [ -f "{{.DEV_CERT_FILE}}" ] && [ -f "{{.DEV_KEY_FILE}}" ]; then
+          DEV_CMD="$DEV_CMD --experimental-https --experimental-https-cert {{.DEV_CERT_FILE}} --experimental-https-key {{.DEV_KEY_FILE}}"
+          printf "\033[1m[INFO]\033[0m Gebruik bestaand HTTPS certificaat uit {{.DEV_CERT_FILE}} en {{.DEV_KEY_FILE}}\n"
+        else
+          DEV_CMD="$DEV_CMD --experimental-https"
+          printf "\033[33m[WARN]\033[0m Geen lokaal HTTPS certificaat gevonden; eerste run kan een sudo-prompt geven voor certificaatgeneratie\n"
+        fi
+        printf "\033[1m[INFO]\033[0m Starting {{.APP_NAME}} op poort {{.DEV_PORT}}...\n"
+        : > "{{.DEV_LOG}}"
+        if command -v setsid >/dev/null 2>&1; then
+          nohup setsid bash -lc "$DEV_CMD" >> "{{.DEV_LOG}}" 2>&1 < /dev/null &
+        else
+          nohup bash -lc "$DEV_CMD" >> "{{.DEV_LOG}}" 2>&1 < /dev/null &
+        fi
+      - task: _wait-for-endpoint
+        vars:
+          LABEL: development
+          PORT: '{{.DEV_PORT}}'
+          SCHEME: '{{.DEV_SCHEME}}'
+          HOST: 127.0.0.1
+          LOG_FILE: '{{.DEV_LOG}}'
+      - |
+        REAL_PID=$(fuser "{{.DEV_PORT}}"/tcp 2>/dev/null | awk '{print $1}')
+        if [ -z "$REAL_PID" ]; then
+          printf "\033[31m[ERR]\033[0m Development server reageert, maar PID kon niet bepaald worden op poort {{.DEV_PORT}}\n"
+          exit 1
+        fi
+        echo "$REAL_PID" > "{{.RUNTIME_DIR}}/dev.pid"
+        printf "\033[32m[OK]\033[0m Development server draait op {{.DEV_SCHEME}}://localhost:{{.DEV_PORT}} (PID %s)\n" "$REAL_PID"
+      - task: _show-endpoints
+        vars:
+          LABEL: development
+          PORT: '{{.DEV_PORT}}'
+          SCHEME: '{{.DEV_SCHEME}}'
+
+  start-prod:
+    desc: Start productie server (vereist build)
+    silent: false
+    cmds:
+      - task: _ensure-ready
+      - task: _ensure-dirs
+      - task: _kill-mode
+        vars:
+          TARGET_PORT: '{{.PROD_PORT}}'
+          PID_FILE: '{{.RUNTIME_DIR}}/prod.pid'
+      - |
+        if [ ! -d ".next" ]; then
+          printf "\033[33m[WARN]\033[0m Geen build gevonden, eerst builden...\n"
+          pnpm run build
+        fi
+        printf "\033[1m[INFO]\033[0m Starting {{.APP_NAME}} (prod) op poort {{.PROD_PORT}}...\n"
+        : > "{{.PROD_LOG}}"
+        if command -v setsid >/dev/null 2>&1; then
+          nohup setsid bash -lc "{{.PROD_CMD}}" >> "{{.PROD_LOG}}" 2>&1 < /dev/null &
+        else
+          nohup bash -lc "{{.PROD_CMD}}" >> "{{.PROD_LOG}}" 2>&1 < /dev/null &
+        fi
+      - task: _wait-for-endpoint
+        vars:
+          LABEL: production
+          PORT: '{{.PROD_PORT}}'
+          SCHEME: '{{.PROD_SCHEME}}'
+          HOST: 127.0.0.1
+          LOG_FILE: '{{.PROD_LOG}}'
+      - |
+        REAL_PID=$(fuser "{{.PROD_PORT}}"/tcp 2>/dev/null | awk '{print $1}')
+        if [ -z "$REAL_PID" ]; then
+          printf "\033[31m[ERR]\033[0m Productie server reageert, maar PID kon niet bepaald worden op poort {{.PROD_PORT}}\n"
+          exit 1
+        fi
+        echo "$REAL_PID" > "{{.RUNTIME_DIR}}/prod.pid"
+        printf "\033[32m[OK]\033[0m Productie server draait op {{.PROD_SCHEME}}://localhost:{{.PROD_PORT}} (PID %s)\n" "$REAL_PID"
+      - task: _show-endpoints
+        vars:
+          LABEL: production
+          PORT: '{{.PROD_PORT}}'
+          SCHEME: '{{.PROD_SCHEME}}'
+
+  stop:
+    desc: Stop alle services
+    silent: false
+    cmds:
+      - |
+        STOPPED=0
+        for NAME in dev prod; do
+          if [ "$NAME" = "dev" ]; then PORT="{{.DEV_PORT}}"; else PORT="{{.PROD_PORT}}"; fi
+          PIDFILE="{{.RUNTIME_DIR}}/${NAME}.pid"
+          # Stop via PID-bestand
+          if [ -f "$PIDFILE" ]; then
+            PID=$(head -1 "$PIDFILE" 2>/dev/null)
+            if /bin/kill -0 "$PID" 2>/dev/null; then
+              /bin/kill -TERM "$PID" 2>/dev/null || true
+              WAITED=0
+              while /bin/kill -0 "$PID" 2>/dev/null && [ "$WAITED" -lt "{{.STOP_TIMEOUT}}" ]; do
+                sleep 1; WAITED=$((WAITED + 1))
+              done
+              /bin/kill -0 "$PID" 2>/dev/null && /bin/kill -KILL "$PID" 2>/dev/null || true
+              printf "\033[32m[OK]\033[0m %s gestopt (PID %s)\n" "$NAME" "$PID"
+              STOPPED=1
+            fi
+            rm -f "$PIDFILE"
+          fi
+          # Laatste fallback: kill alles op de poort (pnpm kan orphan-processen achterlaten)
+          if fuser "$PORT"/tcp >/dev/null 2>&1; then
+            fuser -k "$PORT"/tcp >/dev/null 2>&1 || true
+            sleep 1
+            fuser "$PORT"/tcp >/dev/null 2>&1 && fuser -k -KILL "$PORT"/tcp >/dev/null 2>&1 || true
+            printf "\033[32m[OK]\033[0m %s gestopt via poort %s (orphan cleanup)\n" "$NAME" "$PORT"
+            STOPPED=1
+          fi
+        done
+        if [ "$STOPPED" = "0" ]; then
+          printf "\033[33m[WARN]\033[0m Geen draaiende services gevonden\n"
+        fi
+
+  restart:
+    desc: Herstart development server
+    silent: false
+    cmds:
+      - task: stop
+      - |
+        sleep 1
+      - task: start
+
+  status:
+    desc: Service status
+    silent: false
+    cmds:
+      - |
+        _port_online() {
+          local P="$1"
+          local S="$2"
+          local CURL_EXTRA=""
+          if [ "$S" = "https" ]; then
+            CURL_EXTRA="-k"
+          fi
+          if command -v curl >/dev/null 2>&1; then
+            CODE="$(curl $CURL_EXTRA -s -o /dev/null --max-time 2 -w '%{http_code}' "${S}://127.0.0.1:${P}" 2>/dev/null || true)"
+            if [ "$CODE" != "000" ]; then
+              return 0
+            fi
+          fi
+          if command -v fuser >/dev/null 2>&1; then
+            if fuser "$P"/tcp >/dev/null 2>&1; then
+              return 0
+            fi
+          fi
+          return 1
+        }
+        printf "\033[1;36m=== Service status ===\033[0m\n"
+        for NAME in dev prod; do
+          if [ "$NAME" = "dev" ]; then PORT="{{.DEV_PORT}}"; SCHEME="{{.DEV_SCHEME}}"; else PORT="{{.PROD_PORT}}"; SCHEME="{{.PROD_SCHEME}}"; fi
+          PIDFILE="{{.RUNTIME_DIR}}/${NAME}.pid"
+          PID=""
+          if [ -f "$PIDFILE" ]; then
+            PID=$(head -1 "$PIDFILE" 2>/dev/null || true)
+          fi
+          PID_RUNNING=0
+          if [ -n "$PID" ]; then
+            /bin/kill -0 "$PID" 2>/dev/null && PID_RUNNING=1
+          fi
+          if _port_online "$PORT" "$SCHEME"; then
+            if [ "$PID_RUNNING" = "1" ]; then
+              printf "\033[32m[RUNNING]\033[0m  %s  (poort %s, PID %s)\n" "$NAME" "$PORT" "$PID"
+            else
+              printf "\033[33m[RUNNING]\033[0m  %s  (poort %s, niet via task gestart)\n" "$NAME" "$PORT"
+            fi
+          elif [ "$PID_RUNNING" = "1" ]; then
+            printf "\033[33m[STARTING]\033[0m %s  (proces actief, poort %s nog niet online)\n" "$NAME" "$PORT"
+          else
+            if [ -n "$PID" ]; then
+              rm -f "$PIDFILE" 2>/dev/null || true
+            fi
+            printf "\033[31m[STOPPED]\033[0m  %s\n" "$NAME"
+          fi
+        done
+      - task: _show-endpoints
+        vars:
+          LABEL: development
+          PORT: '{{.DEV_PORT}}'
+          SCHEME: '{{.DEV_SCHEME}}'
+      - task: _show-endpoints
+        vars:
+          LABEL: production
+          PORT: '{{.PROD_PORT}}'
+          SCHEME: '{{.PROD_SCHEME}}'
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # LOGS
+  # ════════════════════════════════════════════════════════════════════════════
+  logs:
+    desc: Volg development logs
+    cmds:
+      - |
+        test -f "{{.DEV_LOG}}" || { printf "\033[33m[WARN]\033[0m Geen logbestand gevonden ({{.DEV_LOG}})\n"; exit 0; }
+        printf "\033[1m[INFO]\033[0m Volgen van {{.DEV_LOG}} (Ctrl+C om te stoppen)\n"
+        tail -f "{{.DEV_LOG}}"
+
+  logs-tail:
+    desc: Laatste 50 regels + follow
+    cmds:
+      - |
+        test -f "{{.DEV_LOG}}" || { printf "\033[33m[WARN]\033[0m Geen logbestand gevonden\n"; exit 0; }
+        tail -n 50 -f "{{.DEV_LOG}}"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # MAINTENANCE
+  # ════════════════════════════════════════════════════════════════════════════
+  clean:
+    desc: Verwijder build-artefacten
+    cmds:
+      - |
+        rm -rf .next dist build out coverage 2>/dev/null || true
+        printf "\033[32m[OK]\033[0m Build-artefacten opgeruimd\n"
+
+  clean-cache:
+    desc: Verwijder caches (.next, .turbo)
+    cmds:
+      - |
+        rm -rf .next .turbo 2>/dev/null || true
+        printf "\033[32m[OK]\033[0m Caches opgeruimd\n"
+
+  clean-all:
+    desc: Verwijder alles (node_modules + build-artefacten + caches)
+    cmds:
+      - |
+        rm -rf node_modules .next dist build out coverage .turbo 2>/dev/null || true
+        rm -rf "{{.RUNTIME_DIR}}" 2>/dev/null || true
+        printf "\033[32m[OK]\033[0m Alles opgeruimd\n"
+
+  clean-logs:
+    desc: Verwijder logbestanden
+    cmds:
+      - |
+        rm -rf "{{.LOGS_DIR}}" 2>/dev/null || true
+        printf "\033[32m[OK]\033[0m Logs opgeruimd\n"
+
+  backup-config:
+    desc: Backup configuratiebestanden
+    cmds:
+      - |
+        BACKUP_DIR=".task/backups/$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$BACKUP_DIR"
+        for f in package.json tsconfig.json next.config.ts eslint.config.mjs .prettierrc port.config.json docker-compose.yml; do
+          [ -f "$f" ] && cp "$f" "$BACKUP_DIR/"
+        done
+        printf "\033[32m[OK]\033[0m Backup opgeslagen in %s\n" "$BACKUP_DIR"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # DOCKER
+  # ════════════════════════════════════════════════════════════════════════════
+  docker-build:
+    desc: Build Docker image
+    silent: false
+    preconditions:
+      - sh: command -v docker >/dev/null 2>&1
+        msg: Docker is niet beschikbaar in PATH
+      - sh: test -f docker-compose.yml || test -f compose.yml || test -f compose.yaml
+        msg: Geen Docker Compose bestand gevonden
+    cmds:
+      - docker compose build
+
+  docker-up:
+    desc: Start Docker containers
+    silent: false
+    preconditions:
+      - sh: command -v docker >/dev/null 2>&1
+        msg: Docker is niet beschikbaar in PATH
+      - sh: test -f docker-compose.yml || test -f compose.yml || test -f compose.yaml
+        msg: Geen Docker Compose bestand gevonden
+    cmds:
+      - docker compose up -d
+      - printf "\033[32m[OK]\033[0m Docker containers gestart\n"
+      - task: _show-endpoints
+        vars:
+          LABEL: docker
+          PORT: '{{.DOCKER_PORT}}'
+          SCHEME: '{{.DOCKER_SCHEME}}'
+
+  docker-down:
+    desc: Stop Docker containers
+    silent: false
+    preconditions:
+      - sh: command -v docker >/dev/null 2>&1
+        msg: Docker is niet beschikbaar in PATH
+      - sh: test -f docker-compose.yml || test -f compose.yml || test -f compose.yaml
+        msg: Geen Docker Compose bestand gevonden
+    cmds:
+      - docker compose down
+      - printf "\033[32m[OK]\033[0m Docker containers gestopt\n"
+
+  docker-logs:
+    desc: Volg Docker logs
+    preconditions:
+      - sh: command -v docker >/dev/null 2>&1
+        msg: Docker is niet beschikbaar in PATH
+      - sh: test -f docker-compose.yml || test -f compose.yml || test -f compose.yaml
+        msg: Geen Docker Compose bestand gevonden
+    cmds:
+      - docker compose logs -f {{.DOCKER_SERVICE}}
+
+  docker-rebuild:
+    desc: Rebuild en herstart Docker containers
+    silent: false
+    preconditions:
+      - sh: command -v docker >/dev/null 2>&1
+        msg: Docker is niet beschikbaar in PATH
+      - sh: test -f docker-compose.yml || test -f compose.yml || test -f compose.yaml
+        msg: Geen Docker Compose bestand gevonden
+    cmds:
+      - docker compose down
+      - docker compose build --no-cache
+      - docker compose up -d
+      - printf "\033[32m[OK]\033[0m Docker containers herbouwd en gestart\n"
+      - task: _show-endpoints
+        vars:
+          LABEL: docker
+          PORT: '{{.DOCKER_PORT}}'
+          SCHEME: '{{.DOCKER_SCHEME}}'
+
+  docker-shell:
+    desc: Open shell in Docker container
+    preconditions:
+      - sh: command -v docker >/dev/null 2>&1
+        msg: Docker is niet beschikbaar in PATH
+      - sh: test -f docker-compose.yml || test -f compose.yml || test -f compose.yaml
+        msg: Geen Docker Compose bestand gevonden
+    cmds:
+      - docker compose exec {{.DOCKER_SERVICE}} sh
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # INTERNAL
+  # ════════════════════════════════════════════════════════════════════════════
+  _build-check:
+    internal: true
+    silent: false
+    cmds:
+      - |
+        printf "\033[1m[INFO]\033[0m Probeer build...\n"
+        if pnpm run build; then
+          printf "\033[32m[OK]\033[0m Build geslaagd\n"
+        else
+          printf "\033[33m[WARN]\033[0m Build mislukt — dit blokkeert dev-setup niet, maar check de errors\n"
+        fi
+
+  _bootstrap-env:
+    internal: true
+    silent: false
+    cmds:
+      - |
+        if [ -f ".env.local" ] || [ -f ".env" ]; then
+          exit 0
+        fi
+
+        if [ -f ".env.example" ]; then
+          cp .env.example .env.local
+          printf "\033[32m[OK]\033[0m .env.local aangemaakt vanuit .env.example\n"
+          exit 0
+        fi
+
+        if [ -f ".env.local.example" ]; then
+          cp .env.local.example .env.local
+          printf "\033[32m[OK]\033[0m .env.local aangemaakt vanuit .env.local.example\n"
+          exit 0
+        fi
+
+        printf "\033[33m[WARN]\033[0m Geen .env/.env.local en geen env-template gevonden; sla env-bootstrap over\n"
+
+  _ensure-ready:
+    internal: true
+    silent: false
+    cmds:
+      - task: _ensure-dirs
+      - |
+        _has() { command -v "$1" >/dev/null 2>&1; }
+
+        MISSING=""
+        _has node || MISSING="$MISSING node"
+        _has pnpm || MISSING="$MISSING pnpm"
+
+        if [ -n "$MISSING" ]; then
+          printf "\033[31m[ERR]\033[0m Ontbrekende tools:%s\n" "$MISSING"
+          printf "\033[1m[INFO]\033[0m Installeer de ontbrekende tooling en run daarna 'task setup'\n"
+          exit 1
+        fi
+
+        NEED_SETUP=0
+        REASONS=""
+
+        if [ ! -d "node_modules" ] || [ ! -f "node_modules/.modules.yaml" ]; then
+          NEED_SETUP=1
+          REASONS="$REASONS dependencies"
+        fi
+
+        if [ -f "node_modules/.modules.yaml" ] && [ -f "package.json" ] && [ "package.json" -nt "node_modules/.modules.yaml" ]; then
+          NEED_SETUP=1
+          REASONS="$REASONS package.json"
+        fi
+
+        if [ -f "node_modules/.modules.yaml" ] && [ -f "pnpm-lock.yaml" ] && [ "pnpm-lock.yaml" -nt "node_modules/.modules.yaml" ]; then
+          NEED_SETUP=1
+          REASONS="$REASONS pnpm-lock.yaml"
+        fi
+
+        if [ ! -f ".env" ] && [ ! -f ".env.local" ] && { [ -f ".env.example" ] || [ -f ".env.local.example" ]; }; then
+          NEED_SETUP=1
+          REASONS="$REASONS env"
+        fi
+
+        if [ "$NEED_SETUP" = "1" ]; then
+          printf "\033[33m[WARN]\033[0m Onvolledige setup gedetecteerd:%s\n" "$REASONS"
+          printf "\033[1m[INFO]\033[0m Voer automatisch 'task setup' uit...\n"
+          task setup
+        fi
+
+  _ensure-dirs:
+    internal: true
+    cmds:
+      - mkdir -p "{{.RUNTIME_DIR}}" "{{.LOGS_DIR}}"
+    status:
+      - test -d "{{.RUNTIME_DIR}}"
+      - test -d "{{.LOGS_DIR}}"
+
+  _kill-mode:
+    # Stopt een bestaande service volledig voor een herstart:
+    # 1. PID-bestand
+    # 2. fuser op de poort als laatste noodstop
+    internal: true
+    vars:
+      TARGET_PORT: '{{default "0" .TARGET_PORT}}'
+      PID_FILE: '{{default "" .PID_FILE}}'
+    cmds:
+      - |
+        _stop_timeout="{{.STOP_TIMEOUT}}"
+        _pidfile="{{.PID_FILE}}"
+        _port="{{.TARGET_PORT}}"
+        # Stop via PID
+        if [ -f "$_pidfile" ]; then
+          PID=$(head -1 "$_pidfile" 2>/dev/null)
+          if /bin/kill -0 "$PID" 2>/dev/null; then
+            /bin/kill -TERM "$PID" 2>/dev/null || true
+            W=0
+            while /bin/kill -0 "$PID" 2>/dev/null && [ "$W" -lt "$_stop_timeout" ]; do
+              sleep 1; W=$((W+1))
+            done
+            /bin/kill -0 "$PID" 2>/dev/null && /bin/kill -KILL "$PID" 2>/dev/null || true
+          fi
+          rm -f "$_pidfile"
+        fi
+        # Noodstop: kill alles op de poort (orphan-processen)
+        if [ "$_port" != "0" ] && fuser "$_port"/tcp >/dev/null 2>&1; then
+          fuser -k "$_port"/tcp >/dev/null 2>&1 || true
+          sleep 1
+          fuser "$_port"/tcp >/dev/null 2>&1 && fuser -k -KILL "$_port"/tcp >/dev/null 2>&1 || true
+        fi
+
+  _stop-port:
+    internal: true
+    vars:
+      TARGET_PORT: '{{default "0" .TARGET_PORT}}'
+    cmds:
+      - |
+        if fuser {{.TARGET_PORT}}/tcp >/dev/null 2>&1; then
+          fuser -k {{.TARGET_PORT}}/tcp >/dev/null 2>&1 || true
+          sleep 1
+          fuser {{.TARGET_PORT}}/tcp >/dev/null 2>&1 && fuser -k -KILL {{.TARGET_PORT}}/tcp >/dev/null 2>&1 || true
+        fi
+
+  _wait-for-endpoint:
+    internal: true
+    silent: false
+    vars:
+      LABEL: '{{default "service" .LABEL}}'
+      PORT: '{{default "0" .PORT}}'
+      SCHEME: '{{default "http" .SCHEME}}'
+      HOST: '{{default "127.0.0.1" .HOST}}'
+      LOG_FILE: '{{default "" .LOG_FILE}}'
+    cmds:
+      - |
+        URL="{{.SCHEME}}://{{.HOST}}:{{.PORT}}/"
+        CURL_EXTRA=""
+        if [ "{{.SCHEME}}" = "https" ]; then
+          CURL_EXTRA="-k"
+        fi
+        ELAPSED=0
+        READY=0
+
+        while [ "$ELAPSED" -lt "{{.START_TIMEOUT}}" ]; do
+          if command -v curl >/dev/null 2>&1; then
+            CODE="$(curl $CURL_EXTRA -s -o /dev/null --max-time 2 -w '%{http_code}' "$URL" 2>/dev/null || true)"
+            if [ -n "$CODE" ] && [ "$CODE" != "000" ]; then
+              READY=1
+              break
+            fi
+          elif command -v fuser >/dev/null 2>&1; then
+            if fuser "{{.PORT}}"/tcp >/dev/null 2>&1; then
+              READY=1
+              break
+            fi
+          fi
+
+          sleep 1
+          ELAPSED=$((ELAPSED + 1))
+        done
+
+        if [ "$READY" != "1" ]; then
+          printf "\033[31m[ERR]\033[0m Start mislukt — {{.LABEL}} endpoint %s reageert niet na {{.START_TIMEOUT}}s\n" "$URL"
+          [ -n "{{.LOG_FILE}}" ] && tail -n 20 "{{.LOG_FILE}}" 2>/dev/null || true
+          exit 1
+        fi
+
+  _show-endpoints:
+    internal: true
+    silent: false
+    cmds:
+      - |
+        LABEL="{{.LABEL}}"
+        PORT="{{.PORT}}"
+        SCHEME="{{default "http" .SCHEME}}"
+        LOCAL_HOST="127.0.0.1"
+        if [ -n "$LABEL" ]; then
+          printf "\033[1;36m=== %s endpoints ===\033[0m\n" "$LABEL"
+        fi
+        printf "\033[1m[INFO]\033[0m local url: %s://localhost:%s\n" "$SCHEME" "$PORT"
+
+        VPN_IP=""
+        VPN_IF=""
+        if command -v nmcli >/dev/null 2>&1; then
+          VPN_IF="$(nmcli -t -f DEVICE,TYPE,STATE device status 2>/dev/null | awk -F: '$3 ~ /^connected/ && $2 ~ /^(wireguard|vpn|tun|tap)$/ {print $1; exit}')"
+          if [ -n "$VPN_IF" ] && command -v ip >/dev/null 2>&1; then
+            VPN_IP="$(ip -o -4 addr show dev "$VPN_IF" scope global 2>/dev/null | awk '{print $4; exit}')"
+            VPN_IP="${VPN_IP%/*}"
+          fi
+        fi
+
+        if command -v ip >/dev/null 2>&1; then
+          if [ -z "$VPN_IP" ]; then
+            VPN_LINE="$(ip -o -4 addr show up scope global 2>/dev/null | awk '$2 ~ /^(tun|tap|wg|tailscale|ppp|utun|zt|vpn)/ {print $2, $4; exit}')"
+          fi
+          if [ -z "$VPN_IP" ] && [ -z "$VPN_LINE" ]; then
+            VPN_LINE="$(ip -o -4 addr show up scope global 2>/dev/null | awk '$2 !~ /^(lo|docker0|br-|veth|virbr|en|eth|wl|wwan)/ && $4 ~ /^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)/ {print $2, $4; exit}')"
+          fi
+          if [ -z "$VPN_IP" ] && [ -z "$VPN_LINE" ]; then
+            VPN_LINE="$(ip -o -4 addr show up scope global 2>/dev/null | awk '$4 ~ /^10\\.0\\.0\\./ {print $2, $4; exit}')"
+          fi
+          if [ -z "$VPN_IP" ] && [ -n "$VPN_LINE" ]; then
+            set -- $VPN_LINE
+            VPN_IF="${VPN_IF:-$1}"
+            VPN_IP="${2%/*}"
+          fi
+        fi
+
+        if [ -n "$VPN_IP" ]; then
+          printf "\033[1m[INFO]\033[0m vpn ip:    %s\n" "$VPN_IP"
+          printf "\033[1m[INFO]\033[0m vpn iface: %s\n" "${VPN_IF:-niet beschikbaar}"
+          printf "\033[1m[INFO]\033[0m vpn url:   %s://%s:%s\n" "$SCHEME" "$VPN_IP" "$PORT"
+        else
+          printf "\033[1m[INFO]\033[0m vpn ip:    niet beschikbaar\n"
+          printf "\033[1m[INFO]\033[0m vpn iface: niet beschikbaar\n"
+          printf "\033[1m[INFO]\033[0m vpn url:   niet beschikbaar\n"
+        fi
+
+        if command -v curl >/dev/null 2>&1; then
+          CURL_EXTRA=""
+          if [ "$SCHEME" = "https" ]; then
+            CURL_EXTRA="-k"
+          fi
+
+          LOCAL_CODE="$(curl $CURL_EXTRA -s -o /dev/null --max-time 2 -w '%{http_code}' "${SCHEME}://${LOCAL_HOST}:${PORT}/" 2>/dev/null || true)"
+          if [ -n "$LOCAL_CODE" ] && [ "$LOCAL_CODE" != "000" ]; then
+            printf "\033[32m[OK]\033[0m local endpoint reageert (%s)\n" "$LOCAL_CODE"
+          else
+            printf "\033[33m[WARN]\033[0m local endpoint reageert niet via %s://%s:%s\n" "$SCHEME" "$LOCAL_HOST" "$PORT"
+          fi
+
+          if [ -n "$VPN_IP" ]; then
+            VPN_CODE="$(curl $CURL_EXTRA -s -o /dev/null --max-time 2 -w '%{http_code}' "${SCHEME}://${VPN_IP}:${PORT}/" 2>/dev/null || true)"
+            if [ -n "$VPN_CODE" ] && [ "$VPN_CODE" != "000" ]; then
+              printf "\033[32m[OK]\033[0m vpn endpoint reageert (%s)\n" "$VPN_CODE"
+            else
+              printf "\033[33m[WARN]\033[0m vpn endpoint reageert niet via %s://%s:%s\n" "$SCHEME" "$VPN_IP" "$PORT"
+            fi
+          fi
+        fi
+
+        if [ "$SCHEME" = "https" ] && [ -n "$VPN_IP" ] && [ -f "{{.DEV_CERT_FILE}}" ] && command -v openssl >/dev/null 2>&1; then
+          if ! openssl x509 -in "{{.DEV_CERT_FILE}}" -noout -ext subjectAltName 2>/dev/null | grep -Fq "IP Address:${VPN_IP}"; then
+            printf "\033[33m[WARN]\033[0m HTTPS certificaat bevat %s niet; browser kan een certificaatwaarschuwing tonen op het vpn-adres\n" "$VPN_IP"
+          fi
+        fi

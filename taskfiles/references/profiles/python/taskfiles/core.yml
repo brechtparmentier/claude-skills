@@ -1,0 +1,628 @@
+# taskfiles/core.yml — Python profile core layer
+# Stack: FastAPI/uvicorn + uv. Gen-3 lifecycle: setup-detection, PID-managed kill,
+# waited startup, multi-iface VPN, env-bootstrap. Calcport-driven ports.
+version: '3'
+silent: true
+
+vars:
+  # ── Project identity ──────────────────────────────────────────────────────
+  APP_NAME: '{{default "python-app" .APP_NAME}}'
+
+  # ── Tooling ───────────────────────────────────────────────────────────────
+  PYTHON: '{{default "python3" .PYTHON}}'
+  UV: '{{default "uv" .UV}}'
+  # Module-pad naar de FastAPI app (bv. "src.myapp.api:app" of "myapp.main:app")
+  APP_MODULE: '{{default "src.app.main:app" .APP_MODULE}}'
+  HOST: '{{default "0.0.0.0" .HOST}}'
+
+  # ── Ports (uit ports.json via calcport, met fallback) ─────────────────────
+  PORTS_FILE: '{{default "ports.json" .PORTS_FILE}}'
+  BACKEND_DEV_PORT:
+    sh: |
+      if [ -f "{{.PORTS_FILE}}" ]; then
+        python3 -c 'import json,sys; d=json.load(open("{{.PORTS_FILE}}")); print(d.get("standard_development",{}).get("backend") or d.get("backend",{}).get("dev") or 8000)' 2>/dev/null || echo 8000
+      elif command -v calcport >/dev/null 2>&1; then
+        calcport 2>/dev/null | awk '/backend.*dev/ {for(i=1;i<=NF;i++) if($i+0>0) {print $i; exit}}' || echo 8000
+      else
+        echo 8000
+      fi
+  BACKEND_PROD_PORT:
+    sh: |
+      if [ -f "{{.PORTS_FILE}}" ]; then
+        python3 -c 'import json,sys; d=json.load(open("{{.PORTS_FILE}}")); print(d.get("standard_production",{}).get("backend") or d.get("backend",{}).get("prod") or 8001)' 2>/dev/null || echo 8001
+      else
+        echo 8001
+      fi
+  DEV_SCHEME: '{{default "http" .DEV_SCHEME}}'
+  PROD_SCHEME: '{{default "http" .PROD_SCHEME}}'
+
+  # ── Runtime paden (drift-correctie: .task ipv .taskrun) ───────────────────
+  RUNTIME_DIR: '{{default ".task" .RUNTIME_DIR}}'
+  LOGS_DIR: '{{default ".task/logs" .LOGS_DIR}}'
+  DEV_LOG: '{{default ".task/logs/dev.log" .DEV_LOG}}'
+  PROD_LOG: '{{default ".task/logs/prod.log" .PROD_LOG}}'
+  DEPS_MARKER: '{{default ".task/.uv-installed" .DEPS_MARKER}}'
+
+  # ── Docker ────────────────────────────────────────────────────────────────
+  DOCKER_SERVICE: '{{default "app" .DOCKER_SERVICE}}'
+
+  # ── Timeouts ──────────────────────────────────────────────────────────────
+  START_TIMEOUT: '{{default "30" .START_TIMEOUT}}'
+  STOP_TIMEOUT: '{{default "15" .STOP_TIMEOUT}}'
+
+tasks:
+  # ════════════════════════════════════════════════════════════════════════════
+  # HELP
+  # ════════════════════════════════════════════════════════════════════════════
+  help:
+    desc: Toon overzicht van beschikbare commando's
+    silent: false
+    cmds:
+      - |
+        printf "\n\033[1;36m=== {{.APP_NAME}} ===\033[0m\n"
+        printf "\033[1mdev port:\033[0m  %s\n" "{{.BACKEND_DEV_PORT}}"
+        printf "\033[1mprod port:\033[0m %s\n" "{{.BACKEND_PROD_PORT}}"
+        printf "\033[1mmodule:\033[0m    %s\n" "{{.APP_MODULE}}"
+        printf "\n\033[1;33mLifecycle:\033[0m\n"
+        printf "  \033[32mtask setup\033[0m        first-time setup (uv sync + env-bootstrap + doctor)\n"
+        printf "  \033[32mtask setup-quick\033[0m  snelle setup (alleen uv sync)\n"
+        printf "  \033[32mtask start\033[0m        start dev server (uvicorn --reload)\n"
+        printf "  \033[32mtask start-prod\033[0m   start productie server\n"
+        printf "  \033[32mtask stop\033[0m         stop server\n"
+        printf "  \033[32mtask restart\033[0m      restart dev server\n"
+        printf "  \033[32mtask logs\033[0m         tail logs\n"
+        printf "  \033[32mtask status\033[0m       service status + endpoints\n"
+        printf "  \033[32mtask doctor\033[0m       diagnose tooling/env\n"
+        printf "  \033[32mtask ports\033[0m        toon calcport-poorten\n"
+        printf "\n\033[1;33mProject:\033[0m\n"
+        printf "  \033[32mtask install\033[0m      uv sync\n"
+        printf "  \033[32mtask test\033[0m         pytest\n"
+        printf "  \033[32mtask lint\033[0m         ruff check\n"
+        printf "  \033[32mtask lint:fix\033[0m     ruff check --fix\n"
+        printf "  \033[32mtask format\033[0m       ruff format\n"
+        printf "  \033[32mtask check\033[0m        lint + format-check\n"
+        printf "\n\033[1;33mMaintenance:\033[0m\n"
+        printf "  \033[32mtask clean\033[0m        verwijder caches (__pycache__, .pytest_cache, .ruff_cache)\n"
+        printf "  \033[32mtask clean:logs\033[0m   verwijder logbestanden\n"
+        printf "  \033[32mtask clean:all\033[0m    verwijder .venv + caches\n"
+        printf "  \033[32mtask uninstall\033[0m    verwijder .venv\n"
+        printf "\n"
+
+  ports:
+    desc: Toon calcport-poorten voor dit project
+    silent: false
+    cmds:
+      - |
+        if [ -f "{{.PORTS_FILE}}" ]; then
+          printf "\033[1;36m=== {{.PORTS_FILE}} ===\033[0m\n"
+          cat "{{.PORTS_FILE}}"
+          printf "\n"
+        elif command -v calcport >/dev/null 2>&1; then
+          printf "\033[1;36m=== calcport output ===\033[0m\n"
+          calcport
+        else
+          printf "\033[33m[WARN]\033[0m {{.PORTS_FILE}} ontbreekt en calcport niet in PATH\n"
+          printf "\033[1m[INFO]\033[0m fallback ports: backend.dev={{.BACKEND_DEV_PORT}} backend.prod={{.BACKEND_PROD_PORT}}\n"
+        fi
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # SETUP
+  # ════════════════════════════════════════════════════════════════════════════
+  setup:
+    desc: Install dependencies + env bootstrap + health-check
+    silent: false
+    cmds:
+      - task: _ensure-dirs
+      - task: install
+      - task: _bootstrap-env
+      - touch "{{.DEPS_MARKER}}"
+      - task: doctor
+      - printf "\033[32m[OK]\033[0m setup voltooid\n"
+
+  setup-quick:
+    desc: Snelle setup (uv sync + env-bootstrap)
+    silent: false
+    cmds:
+      - task: _ensure-dirs
+      - task: install
+      - task: _bootstrap-env
+      - touch "{{.DEPS_MARKER}}"
+      - printf "\033[32m[OK]\033[0m quick setup voltooid\n"
+
+  install:
+    desc: Install dependencies (uv sync)
+    silent: false
+    cmds:
+      - |
+        if [ -f "uv.lock" ] || [ -f "pyproject.toml" ]; then
+          {{.UV}} sync
+        else
+          printf "\033[31m[ERR]\033[0m geen pyproject.toml of uv.lock gevonden\n"
+          exit 1
+        fi
+
+  uninstall:
+    desc: Verwijder .venv
+    cmds:
+      - |
+        rm -rf .venv 2>/dev/null || true
+        rm -f "{{.DEPS_MARKER}}" 2>/dev/null || true
+        printf "\033[32m[OK]\033[0m .venv verwijderd\n"
+
+  doctor:
+    desc: Health-check (tooling + env + bestanden)
+    silent: false
+    cmds:
+      - |
+        FAIL=0; WARN=0
+        ok()   { printf "\033[32m[OK]\033[0m   %s\n" "$1"; }
+        bad()  { printf "\033[31m[ERR]\033[0m  %s\n" "$1"; FAIL=$((FAIL+1)); }
+        warn() { printf "\033[33m[WARN]\033[0m %s\n" "$1"; WARN=$((WARN+1)); }
+        need() { command -v "$1" >/dev/null 2>&1 && ok "$1" || bad "$1 ontbreekt"; }
+        maybe(){ command -v "$1" >/dev/null 2>&1 && ok "$1" || warn "$1 ontbreekt (optioneel)"; }
+
+        printf "\033[1;36m=== TOOLING ===\033[0m\n"
+        need task; need git; need {{.UV}}; need {{.PYTHON}}
+        need calcport; need lsof
+        maybe docker
+
+        printf "\n\033[1;36m=== BESTANDEN ===\033[0m\n"
+        [ -f pyproject.toml ] && ok "pyproject.toml" || bad "pyproject.toml ontbreekt"
+        [ -f uv.lock ] && ok "uv.lock" || warn "uv.lock ontbreekt (run 'task install')"
+        [ -f "{{.PORTS_FILE}}" ] && ok "{{.PORTS_FILE}}" || warn "{{.PORTS_FILE}} ontbreekt (calcport fallback)"
+        [ -f .env.local ] || [ -f .env ] && ok ".env(.local)" || warn ".env / .env.local ontbreekt"
+
+        printf "\n\033[1;36m=== RUNTIME ===\033[0m\n"
+        [ -d .venv ] && ok ".venv" || warn ".venv ontbreekt (run 'task install')"
+        [ -d "{{.RUNTIME_DIR}}" ] && ok "{{.RUNTIME_DIR}}/" || warn "{{.RUNTIME_DIR}}/ ontbreekt (wordt aangemaakt bij start)"
+
+        PY_V=$({{.PYTHON}} --version 2>/dev/null)
+        UV_V=$({{.UV}} --version 2>/dev/null)
+        printf "\n\033[1m%s | %s\033[0m\n" "$PY_V" "$UV_V"
+
+        printf "\n"
+        [ "$FAIL" -gt 0 ] && printf "\033[31m%d critical issues\033[0m\n" "$FAIL" && exit 1
+        [ "$WARN" -gt 0 ] && printf "\033[33m%d warnings\033[0m\n" "$WARN"
+        printf "\033[32mDoctor: OK\033[0m\n"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # LIFECYCLE
+  # ════════════════════════════════════════════════════════════════════════════
+  start:
+    desc: Start development server (uvicorn --reload)
+    silent: false
+    cmds:
+      - task: _ensure-ready
+      - task: _ensure-dirs
+      - task: _kill-mode
+        vars:
+          TARGET_PORT: '{{.BACKEND_DEV_PORT}}'
+          PID_FILE: '{{.RUNTIME_DIR}}/dev.pid'
+      - |
+        printf "\033[1m[INFO]\033[0m starting {{.APP_NAME}} dev op poort {{.BACKEND_DEV_PORT}}...\n"
+        : > "{{.DEV_LOG}}"
+        DEV_CMD="{{.UV}} run uvicorn {{.APP_MODULE}} --host {{.HOST}} --port {{.BACKEND_DEV_PORT}} --reload"
+        if command -v setsid >/dev/null 2>&1; then
+          nohup setsid bash -lc "$DEV_CMD" >> "{{.DEV_LOG}}" 2>&1 < /dev/null &
+        else
+          nohup bash -lc "$DEV_CMD" >> "{{.DEV_LOG}}" 2>&1 < /dev/null &
+        fi
+      - task: _wait-for-endpoint
+        vars:
+          LABEL: development
+          PORT: '{{.BACKEND_DEV_PORT}}'
+          SCHEME: '{{.DEV_SCHEME}}'
+          HOST: 127.0.0.1
+          LOG_FILE: '{{.DEV_LOG}}'
+      - |
+        REAL_PID=$(fuser "{{.BACKEND_DEV_PORT}}"/tcp 2>/dev/null | awk '{print $1}')
+        if [ -z "$REAL_PID" ]; then
+          printf "\033[31m[ERR]\033[0m server reageert maar PID kon niet bepaald worden op poort {{.BACKEND_DEV_PORT}}\n"
+          exit 1
+        fi
+        echo "$REAL_PID" > "{{.RUNTIME_DIR}}/dev.pid"
+        printf "\033[32m[OK]\033[0m dev server draait op {{.DEV_SCHEME}}://localhost:{{.BACKEND_DEV_PORT}} (PID %s)\n" "$REAL_PID"
+      - task: _show-endpoints
+        vars:
+          LABEL: development
+          PORT: '{{.BACKEND_DEV_PORT}}'
+          SCHEME: '{{.DEV_SCHEME}}'
+
+  start-prod:
+    desc: Start productie server (geen --reload)
+    silent: false
+    cmds:
+      - task: _ensure-ready
+      - task: _ensure-dirs
+      - task: _kill-mode
+        vars:
+          TARGET_PORT: '{{.BACKEND_PROD_PORT}}'
+          PID_FILE: '{{.RUNTIME_DIR}}/prod.pid'
+      - |
+        printf "\033[1m[INFO]\033[0m starting {{.APP_NAME}} prod op poort {{.BACKEND_PROD_PORT}}...\n"
+        : > "{{.PROD_LOG}}"
+        PROD_CMD="{{.UV}} run uvicorn {{.APP_MODULE}} --host {{.HOST}} --port {{.BACKEND_PROD_PORT}}"
+        if command -v setsid >/dev/null 2>&1; then
+          nohup setsid bash -lc "$PROD_CMD" >> "{{.PROD_LOG}}" 2>&1 < /dev/null &
+        else
+          nohup bash -lc "$PROD_CMD" >> "{{.PROD_LOG}}" 2>&1 < /dev/null &
+        fi
+      - task: _wait-for-endpoint
+        vars:
+          LABEL: production
+          PORT: '{{.BACKEND_PROD_PORT}}'
+          SCHEME: '{{.PROD_SCHEME}}'
+          HOST: 127.0.0.1
+          LOG_FILE: '{{.PROD_LOG}}'
+      - |
+        REAL_PID=$(fuser "{{.BACKEND_PROD_PORT}}"/tcp 2>/dev/null | awk '{print $1}')
+        if [ -z "$REAL_PID" ]; then
+          printf "\033[31m[ERR]\033[0m prod server reageert maar PID kon niet bepaald worden op poort {{.BACKEND_PROD_PORT}}\n"
+          exit 1
+        fi
+        echo "$REAL_PID" > "{{.RUNTIME_DIR}}/prod.pid"
+        printf "\033[32m[OK]\033[0m prod server draait op {{.PROD_SCHEME}}://localhost:{{.BACKEND_PROD_PORT}} (PID %s)\n" "$REAL_PID"
+      - task: _show-endpoints
+        vars:
+          LABEL: production
+          PORT: '{{.BACKEND_PROD_PORT}}'
+          SCHEME: '{{.PROD_SCHEME}}'
+
+  stop:
+    desc: Stop alle services
+    silent: false
+    cmds:
+      - |
+        STOPPED=0
+        for NAME in dev prod; do
+          if [ "$NAME" = "dev" ]; then PORT="{{.BACKEND_DEV_PORT}}"; else PORT="{{.BACKEND_PROD_PORT}}"; fi
+          PIDFILE="{{.RUNTIME_DIR}}/${NAME}.pid"
+          # Stop via PID-bestand
+          if [ -f "$PIDFILE" ]; then
+            PID=$(head -1 "$PIDFILE" 2>/dev/null)
+            if /bin/kill -0 "$PID" 2>/dev/null; then
+              /bin/kill -TERM "$PID" 2>/dev/null || true
+              W=0
+              while /bin/kill -0 "$PID" 2>/dev/null && [ "$W" -lt "{{.STOP_TIMEOUT}}" ]; do
+                sleep 1; W=$((W+1))
+              done
+              /bin/kill -0 "$PID" 2>/dev/null && /bin/kill -KILL "$PID" 2>/dev/null || true
+              printf "\033[32m[OK]\033[0m %s gestopt (PID %s)\n" "$NAME" "$PID"
+              STOPPED=1
+            fi
+            rm -f "$PIDFILE"
+          fi
+          # Fallback: orphan-cleanup op poort (uvicorn child-workers)
+          if fuser "$PORT"/tcp >/dev/null 2>&1; then
+            fuser -k "$PORT"/tcp >/dev/null 2>&1 || true
+            sleep 1
+            fuser "$PORT"/tcp >/dev/null 2>&1 && fuser -k -KILL "$PORT"/tcp >/dev/null 2>&1 || true
+            printf "\033[32m[OK]\033[0m %s gestopt via poort %s (orphan cleanup)\n" "$NAME" "$PORT"
+            STOPPED=1
+          fi
+        done
+        if [ "$STOPPED" = "0" ]; then
+          printf "\033[33m[WARN]\033[0m geen draaiende services gevonden\n"
+        fi
+
+  restart:
+    desc: Herstart development server
+    silent: false
+    cmds:
+      - task: stop
+      - sleep 1
+      - task: start
+
+  status:
+    desc: Service status (dev + prod)
+    silent: false
+    cmds:
+      - |
+        _port_online() {
+          local P="$1"
+          local S="$2"
+          local CURL_EXTRA=""
+          [ "$S" = "https" ] && CURL_EXTRA="-k"
+          if command -v curl >/dev/null 2>&1; then
+            CODE="$(curl $CURL_EXTRA -s -o /dev/null --max-time 2 -w '%{http_code}' "${S}://127.0.0.1:${P}" 2>/dev/null || true)"
+            [ "$CODE" != "000" ] && return 0
+          fi
+          if command -v fuser >/dev/null 2>&1; then
+            fuser "$P"/tcp >/dev/null 2>&1 && return 0
+          fi
+          return 1
+        }
+        printf "\033[1;36m=== service status ===\033[0m\n"
+        for NAME in dev prod; do
+          if [ "$NAME" = "dev" ]; then
+            PORT="{{.BACKEND_DEV_PORT}}"; SCHEME="{{.DEV_SCHEME}}"
+          else
+            PORT="{{.BACKEND_PROD_PORT}}"; SCHEME="{{.PROD_SCHEME}}"
+          fi
+          PIDFILE="{{.RUNTIME_DIR}}/${NAME}.pid"
+          PID=""
+          [ -f "$PIDFILE" ] && PID=$(head -1 "$PIDFILE" 2>/dev/null || true)
+          PID_RUNNING=0
+          [ -n "$PID" ] && /bin/kill -0 "$PID" 2>/dev/null && PID_RUNNING=1
+          if _port_online "$PORT" "$SCHEME"; then
+            if [ "$PID_RUNNING" = "1" ]; then
+              printf "\033[32m[RUNNING]\033[0m  %s  (poort %s, PID %s)\n" "$NAME" "$PORT" "$PID"
+            else
+              printf "\033[33m[RUNNING]\033[0m  %s  (poort %s, niet via task gestart)\n" "$NAME" "$PORT"
+            fi
+          elif [ "$PID_RUNNING" = "1" ]; then
+            printf "\033[33m[STARTING]\033[0m %s  (proces actief, poort %s nog niet online)\n" "$NAME" "$PORT"
+          else
+            [ -n "$PID" ] && rm -f "$PIDFILE" 2>/dev/null || true
+            printf "\033[31m[STOPPED]\033[0m  %s\n" "$NAME"
+          fi
+        done
+      - task: _show-endpoints
+        vars:
+          LABEL: development
+          PORT: '{{.BACKEND_DEV_PORT}}'
+          SCHEME: '{{.DEV_SCHEME}}'
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # LOGS
+  # ════════════════════════════════════════════════════════════════════════════
+  logs:
+    desc: Volg dev logs
+    cmds:
+      - |
+        test -f "{{.DEV_LOG}}" || { printf "\033[33m[WARN]\033[0m geen logbestand ({{.DEV_LOG}})\n"; exit 0; }
+        printf "\033[1m[INFO]\033[0m volgen van {{.DEV_LOG}} (Ctrl+C om te stoppen)\n"
+        tail -f "{{.DEV_LOG}}"
+
+  logs-tail:
+    desc: Laatste 50 regels + follow
+    cmds:
+      - |
+        test -f "{{.DEV_LOG}}" || { printf "\033[33m[WARN]\033[0m geen logbestand\n"; exit 0; }
+        tail -n 50 -f "{{.DEV_LOG}}"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # MAINTENANCE
+  # ════════════════════════════════════════════════════════════════════════════
+  clean:
+    desc: Verwijder Python caches
+    cmds:
+      - |
+        find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+        find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+        find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
+        find . -type d -name ".mypy_cache" -exec rm -rf {} + 2>/dev/null || true
+        find . -type f -name "*.pyc" -delete 2>/dev/null || true
+        printf "\033[32m[OK]\033[0m caches opgeruimd\n"
+
+  clean-logs:
+    desc: Verwijder logbestanden
+    cmds:
+      - |
+        rm -rf "{{.LOGS_DIR}}" 2>/dev/null || true
+        printf "\033[32m[OK]\033[0m logs opgeruimd\n"
+
+  clean-all:
+    desc: Verwijder .venv + caches
+    cmds:
+      - task: uninstall
+      - task: clean
+      - |
+        rm -rf "{{.RUNTIME_DIR}}" 2>/dev/null || true
+        printf "\033[32m[OK]\033[0m alles opgeruimd\n"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # INTERNAL building blocks (gen-3)
+  # ════════════════════════════════════════════════════════════════════════════
+  _bootstrap-env:
+    internal: true
+    silent: false
+    cmds:
+      - |
+        if [ -f ".env.local" ] || [ -f ".env" ]; then exit 0; fi
+        if [ -f ".env.example" ]; then
+          cp .env.example .env.local
+          printf "\033[32m[OK]\033[0m .env.local aangemaakt vanuit .env.example\n"
+          exit 0
+        fi
+        if [ -f ".env.local.example" ]; then
+          cp .env.local.example .env.local
+          printf "\033[32m[OK]\033[0m .env.local aangemaakt vanuit .env.local.example\n"
+          exit 0
+        fi
+        printf "\033[33m[WARN]\033[0m geen .env/.env.local en geen template gevonden; sla over\n"
+
+  _ensure-ready:
+    internal: true
+    silent: false
+    cmds:
+      - task: _ensure-dirs
+      - |
+        _has() { command -v "$1" >/dev/null 2>&1; }
+        MISSING=""
+        _has {{.UV}}     || MISSING="$MISSING {{.UV}}"
+        _has {{.PYTHON}} || MISSING="$MISSING {{.PYTHON}}"
+        if [ -n "$MISSING" ]; then
+          printf "\033[31m[ERR]\033[0m ontbrekende tools:%s\n" "$MISSING"
+          printf "\033[1m[INFO]\033[0m installeer ontbrekende tooling en run 'task setup'\n"
+          exit 1
+        fi
+
+        NEED_SETUP=0
+        REASONS=""
+
+        # .venv afwezig of marker afwezig
+        if [ ! -d ".venv" ] || [ ! -f "{{.DEPS_MARKER}}" ]; then
+          NEED_SETUP=1
+          REASONS="$REASONS dependencies"
+        fi
+
+        # pyproject.toml nieuwer dan marker
+        if [ -f "{{.DEPS_MARKER}}" ] && [ -f "pyproject.toml" ] && [ "pyproject.toml" -nt "{{.DEPS_MARKER}}" ]; then
+          NEED_SETUP=1
+          REASONS="$REASONS pyproject.toml"
+        fi
+
+        # uv.lock nieuwer dan marker
+        if [ -f "{{.DEPS_MARKER}}" ] && [ -f "uv.lock" ] && [ "uv.lock" -nt "{{.DEPS_MARKER}}" ]; then
+          NEED_SETUP=1
+          REASONS="$REASONS uv.lock"
+        fi
+
+        # env-bestand mist en template aanwezig
+        if [ ! -f ".env" ] && [ ! -f ".env.local" ] && { [ -f ".env.example" ] || [ -f ".env.local.example" ]; }; then
+          NEED_SETUP=1
+          REASONS="$REASONS env"
+        fi
+
+        if [ "$NEED_SETUP" = "1" ]; then
+          printf "\033[33m[WARN]\033[0m onvolledige setup gedetecteerd:%s\n" "$REASONS"
+          printf "\033[1m[INFO]\033[0m voer automatisch 'task setup' uit...\n"
+          task setup
+        fi
+
+  _ensure-dirs:
+    internal: true
+    cmds:
+      - mkdir -p "{{.RUNTIME_DIR}}" "{{.LOGS_DIR}}"
+    status:
+      - test -d "{{.RUNTIME_DIR}}"
+      - test -d "{{.LOGS_DIR}}"
+
+  _kill-mode:
+    # Stopt een bestaande service: PID-bestand → fuser orphan-cleanup
+    internal: true
+    vars:
+      TARGET_PORT: '{{default "0" .TARGET_PORT}}'
+      PID_FILE: '{{default "" .PID_FILE}}'
+    cmds:
+      - |
+        _stop_timeout="{{.STOP_TIMEOUT}}"
+        _pidfile="{{.PID_FILE}}"
+        _port="{{.TARGET_PORT}}"
+        if [ -f "$_pidfile" ]; then
+          PID=$(head -1 "$_pidfile" 2>/dev/null)
+          if /bin/kill -0 "$PID" 2>/dev/null; then
+            /bin/kill -TERM "$PID" 2>/dev/null || true
+            W=0
+            while /bin/kill -0 "$PID" 2>/dev/null && [ "$W" -lt "$_stop_timeout" ]; do
+              sleep 1; W=$((W+1))
+            done
+            /bin/kill -0 "$PID" 2>/dev/null && /bin/kill -KILL "$PID" 2>/dev/null || true
+          fi
+          rm -f "$_pidfile"
+        fi
+        if [ "$_port" != "0" ] && fuser "$_port"/tcp >/dev/null 2>&1; then
+          fuser -k "$_port"/tcp >/dev/null 2>&1 || true
+          sleep 1
+          fuser "$_port"/tcp >/dev/null 2>&1 && fuser -k -KILL "$_port"/tcp >/dev/null 2>&1 || true
+        fi
+
+  _wait-for-endpoint:
+    internal: true
+    silent: false
+    vars:
+      LABEL: '{{default "service" .LABEL}}'
+      PORT: '{{default "0" .PORT}}'
+      SCHEME: '{{default "http" .SCHEME}}'
+      HOST: '{{default "127.0.0.1" .HOST}}'
+      LOG_FILE: '{{default "" .LOG_FILE}}'
+    cmds:
+      - |
+        URL="{{.SCHEME}}://{{.HOST}}:{{.PORT}}/"
+        CURL_EXTRA=""
+        [ "{{.SCHEME}}" = "https" ] && CURL_EXTRA="-k"
+        ELAPSED=0
+        READY=0
+        while [ "$ELAPSED" -lt "{{.START_TIMEOUT}}" ]; do
+          if command -v curl >/dev/null 2>&1; then
+            CODE="$(curl $CURL_EXTRA -s -o /dev/null --max-time 2 -w '%{http_code}' "$URL" 2>/dev/null || true)"
+            if [ -n "$CODE" ] && [ "$CODE" != "000" ]; then
+              READY=1; break
+            fi
+          elif command -v fuser >/dev/null 2>&1; then
+            if fuser "{{.PORT}}"/tcp >/dev/null 2>&1; then
+              READY=1; break
+            fi
+          fi
+          sleep 1
+          ELAPSED=$((ELAPSED + 1))
+        done
+        if [ "$READY" != "1" ]; then
+          printf "\033[31m[ERR]\033[0m start mislukt — {{.LABEL}} endpoint %s reageert niet na {{.START_TIMEOUT}}s\n" "$URL"
+          [ -n "{{.LOG_FILE}}" ] && tail -n 20 "{{.LOG_FILE}}" 2>/dev/null || true
+          exit 1
+        fi
+
+  _show-endpoints:
+    # Multi-iface VPN-detectie:
+    # 1) nmcli connected wireguard|vpn|tun|tap
+    # 2) ip -o -4 addr op tun|tap|wg|tailscale|ppp|utun|zt|vpn
+    # 3) RFC1918 fallback, exclude lo|docker|br-|veth|virbr|en|eth|wl|wwan
+    # 4) 10.0.0.x specifieke fallback
+    internal: true
+    silent: false
+    cmds:
+      - |
+        LABEL="{{.LABEL}}"
+        PORT="{{.PORT}}"
+        SCHEME="{{default "http" .SCHEME}}"
+        LOCAL_HOST="127.0.0.1"
+        if [ -n "$LABEL" ]; then
+          printf "\033[1;36m=== %s endpoints ===\033[0m\n" "$LABEL"
+        fi
+        printf "\033[1m[INFO]\033[0m local url: %s://localhost:%s\n" "$SCHEME" "$PORT"
+
+        VPN_IP=""
+        VPN_IF=""
+        if command -v nmcli >/dev/null 2>&1; then
+          VPN_IF="$(nmcli -t -f DEVICE,TYPE,STATE device status 2>/dev/null | awk -F: '$3 ~ /^connected/ && $2 ~ /^(wireguard|vpn|tun|tap)$/ {print $1; exit}')"
+          if [ -n "$VPN_IF" ] && command -v ip >/dev/null 2>&1; then
+            VPN_IP="$(ip -o -4 addr show dev "$VPN_IF" scope global 2>/dev/null | awk '{print $4; exit}')"
+            VPN_IP="${VPN_IP%/*}"
+          fi
+        fi
+
+        if command -v ip >/dev/null 2>&1; then
+          if [ -z "$VPN_IP" ]; then
+            VPN_LINE="$(ip -o -4 addr show up scope global 2>/dev/null | awk '$2 ~ /^(tun|tap|wg|tailscale|ppp|utun|zt|vpn)/ {print $2, $4; exit}')"
+          fi
+          if [ -z "$VPN_IP" ] && [ -z "$VPN_LINE" ]; then
+            VPN_LINE="$(ip -o -4 addr show up scope global 2>/dev/null | awk '$2 !~ /^(lo|docker0|br-|veth|virbr|en|eth|wl|wwan)/ && $4 ~ /^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)/ {print $2, $4; exit}')"
+          fi
+          if [ -z "$VPN_IP" ] && [ -z "$VPN_LINE" ]; then
+            VPN_LINE="$(ip -o -4 addr show up scope global 2>/dev/null | awk '$4 ~ /^10\\.0\\.0\\./ {print $2, $4; exit}')"
+          fi
+          if [ -z "$VPN_IP" ] && [ -n "$VPN_LINE" ]; then
+            set -- $VPN_LINE
+            VPN_IF="${VPN_IF:-$1}"
+            VPN_IP="${2%/*}"
+          fi
+        fi
+
+        if [ -n "$VPN_IP" ]; then
+          printf "\033[1m[INFO]\033[0m vpn ip:    %s\n" "$VPN_IP"
+          printf "\033[1m[INFO]\033[0m vpn iface: %s\n" "${VPN_IF:-niet beschikbaar}"
+          printf "\033[1m[INFO]\033[0m vpn url:   %s://%s:%s\n" "$SCHEME" "$VPN_IP" "$PORT"
+        else
+          printf "\033[1m[INFO]\033[0m vpn ip:    niet beschikbaar\n"
+        fi
+
+        if command -v curl >/dev/null 2>&1; then
+          CURL_EXTRA=""
+          [ "$SCHEME" = "https" ] && CURL_EXTRA="-k"
+          LOCAL_CODE="$(curl $CURL_EXTRA -s -o /dev/null --max-time 2 -w '%{http_code}' "${SCHEME}://${LOCAL_HOST}:${PORT}/" 2>/dev/null || true)"
+          if [ -n "$LOCAL_CODE" ] && [ "$LOCAL_CODE" != "000" ]; then
+            printf "\033[32m[OK]\033[0m local endpoint reageert (%s)\n" "$LOCAL_CODE"
+          else
+            printf "\033[33m[WARN]\033[0m local endpoint reageert niet via %s://%s:%s\n" "$SCHEME" "$LOCAL_HOST" "$PORT"
+          fi
+          if [ -n "$VPN_IP" ]; then
+            VPN_CODE="$(curl $CURL_EXTRA -s -o /dev/null --max-time 2 -w '%{http_code}' "${SCHEME}://${VPN_IP}:${PORT}/" 2>/dev/null || true)"
+            if [ -n "$VPN_CODE" ] && [ "$VPN_CODE" != "000" ]; then
+              printf "\033[32m[OK]\033[0m vpn endpoint reageert (%s)\n" "$VPN_CODE"
+            else
+              printf "\033[33m[WARN]\033[0m vpn endpoint reageert niet via %s://%s:%s\n" "$SCHEME" "$VPN_IP" "$PORT"
+            fi
+          fi
+        fi

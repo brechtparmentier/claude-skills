@@ -1,0 +1,491 @@
+# taskfiles/core.yml - Standardized Core Layer
+# Canonical start/stop/restart/logs/status commands
+# Wraps existing server management from dev.yml
+
+version: '3'
+silent: true
+
+vars:
+  APP_NAME: '{{default "bingel-kucu" .APP_NAME}}'
+  FRONTEND_PORT: '{{default "43153" .FRONTEND_PORT}}'
+  API_PORT: '{{default "43155" .API_PORT}}'
+  USE_DOCKER: '{{default "0" .USE_DOCKER}}'
+  VPN_IP: '{{default "" .VPN_IP}}'
+
+tasks:
+  help:
+    desc: Show core command help with URLs
+    silent: false
+    cmds:
+      - |
+        VPN_IP="{{.VPN_IP}}"
+        VPN_IFACE=""
+        detect_vpn_ip() {
+          if [ -n "$VPN_IP" ]; then
+            VPN_IFACE="override"
+            return
+          fi
+
+          CANDIDATE_IP=$(ip -4 -o addr show dev tun0 up 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+          if [ -n "$CANDIDATE_IP" ]; then
+            VPN_IP="$CANDIDATE_IP"
+            VPN_IFACE="tun0"
+            return
+          fi
+
+          CANDIDATE_IP=$(ip -4 -o addr show dev wg0 up 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+          if [ -n "$CANDIDATE_IP" ]; then
+            VPN_IP="$CANDIDATE_IP"
+            VPN_IFACE="wg0"
+            return
+          fi
+
+          FALLBACK_LINE=$(ip -4 -o addr show up scope global 2>/dev/null | \
+            awk '$2 != "lo" {print $2" "$4}' | \
+            awk '$2 ~ /^10\.0\.0\.[0-9]+\// {print; exit}')
+          if [ -n "$FALLBACK_LINE" ]; then
+            VPN_IFACE=$(echo "$FALLBACK_LINE" | awk '{print $1}')
+            VPN_IP=$(echo "$FALLBACK_LINE" | awk '{print $2}' | cut -d/ -f1)
+          fi
+        }
+        detect_vpn_ip
+
+        printf "\n\033[1;36m=== TASK CORE ===\033[0m\n"
+        printf "\033[1mapp:\033[0m    %s\n" "{{.APP_NAME}}"
+        printf "\033[1mmode:\033[0m   %s\n" "$( [ \"{{.USE_DOCKER}}\" = \"1\" ] && echo docker || echo local )"
+        printf "\033[1murls:\033[0m\n"
+        printf "  Frontend:   http://localhost:%s\n" "{{.FRONTEND_PORT}}"
+        printf "  API:        http://localhost:%s\n" "{{.API_PORT}}"
+        printf "  API Docs:   http://localhost:%s/docs\n" "{{.API_PORT}}"
+        printf "  Smart Sync: http://localhost:%s/smart-sync.html\n" "{{.FRONTEND_PORT}}"
+        if [ -n "$VPN_IP" ]; then
+          printf "  VPN (%s):   http://%s:%s\n" "$VPN_IFACE" "$VPN_IP" "{{.FRONTEND_PORT}}"
+          printf "  VPN (%s):   http://%s:%s\n" "$VPN_IFACE" "$VPN_IP" "{{.API_PORT}}"
+        fi
+        printf "\n\033[1;33mCore Commands:\033[0m\n"
+        printf "  \033[32mtask start\033[0m     Start app (frontend + API)\n"
+        printf "  \033[32mtask stop\033[0m      Stop app\n"
+        printf "  \033[32mtask restart\033[0m   Restart app\n"
+        printf "  \033[32mtask logs\033[0m      Show logs\n"
+        printf "  \033[32mtask status\033[0m    Service status\n"
+        printf "\n\033[1;33mDevelopment:\033[0m\n"
+        printf "  \033[32mtask dev\033[0m       Alias for start\n"
+        printf "  \033[32mtask test\033[0m      Run tests\n"
+        printf "  \033[32mtask setup\033[0m     Project setup\n"
+        printf "\n\033[1;33mPipeline:\033[0m\n"
+        printf "  \033[32mtask import\033[0m    Import JSON to DB\n"
+        printf "  \033[32mtask export\033[0m    Export DB to dashboard\n"
+        printf "  \033[32mtask scrape\033[0m    Scrape Bingel data\n"
+        printf "\n"
+
+  start:
+    desc: Start app (frontend + API servers)
+    silent: false
+    cmds:
+      - |
+        VPN_IP="{{.VPN_IP}}"
+        VPN_IFACE=""
+        detect_vpn_ip() {
+          if [ -n "$VPN_IP" ]; then
+            VPN_IFACE="override"
+            return
+          fi
+
+          CANDIDATE_IP=$(ip -4 -o addr show dev tun0 up 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+          if [ -n "$CANDIDATE_IP" ]; then
+            VPN_IP="$CANDIDATE_IP"
+            VPN_IFACE="tun0"
+            return
+          fi
+
+          CANDIDATE_IP=$(ip -4 -o addr show dev wg0 up 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+          if [ -n "$CANDIDATE_IP" ]; then
+            VPN_IP="$CANDIDATE_IP"
+            VPN_IFACE="wg0"
+            return
+          fi
+
+          FALLBACK_LINE=$(ip -4 -o addr show up scope global 2>/dev/null | \
+            awk '$2 != "lo" {print $2" "$4}' | \
+            awk '$2 ~ /^10\.0\.0\.[0-9]+\// {print; exit}')
+          if [ -n "$FALLBACK_LINE" ]; then
+            VPN_IFACE=$(echo "$FALLBACK_LINE" | awk '{print $1}')
+            VPN_IP=$(echo "$FALLBACK_LINE" | awk '{print $2}' | cut -d/ -f1)
+          fi
+        }
+        detect_vpn_ip
+
+        # Ensure directories exist
+        mkdir -p logs data/.pids
+        PROJECT_ROOT="{{.PROJECT_ROOT}}"
+        PYTHON_BIN="{{.PYTHON}}"
+        is_project_cwd() {
+          case "$1" in
+            "$PROJECT_ROOT" | "$PROJECT_ROOT"/*) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
+
+        # Cleanup existing project-owned processes only (shared-server safe)
+        stop_if_owned() {
+          PID_FILE="$1"
+          SCRIPT_MATCH="$2"
+          if [ -f "$PID_FILE" ]; then
+            PID=$(cat "$PID_FILE")
+            if [ -n "$PID" ] && ps -p "$PID" >/dev/null 2>&1; then
+              PROC_CWD=$(readlink -f "/proc/$PID/cwd" 2>/dev/null || echo "")
+              PROC_CMD=$(ps -p "$PID" -o args= 2>/dev/null || echo "")
+              if is_project_cwd "$PROC_CWD" && echo "$PROC_CMD" | grep -Fq "$SCRIPT_MATCH"; then
+                /usr/bin/kill "$PID" 2>/dev/null || true
+              fi
+            fi
+            rm -f "$PID_FILE"
+          fi
+        }
+        stop_if_owned "data/.pids/api.pid" "api/server.py"
+        stop_if_owned "data/.pids/frontend.pid" "scripts/serve.py"
+
+        # Fallback: scan for matching processes but only kill if owned by this project
+        for PID in $(pgrep -f "api/server.py" 2>/dev/null || true); do
+          PROC_CWD=$(readlink -f "/proc/$PID/cwd" 2>/dev/null || echo "")
+          PROC_CMD=$(ps -p "$PID" -o args= 2>/dev/null || echo "")
+          if is_project_cwd "$PROC_CWD" && echo "$PROC_CMD" | grep -Fq "$PYTHON_BIN"; then
+            /usr/bin/kill "$PID" 2>/dev/null || true
+          fi
+        done
+        for PID in $(pgrep -f "scripts/serve.py" 2>/dev/null || true); do
+          PROC_CWD=$(readlink -f "/proc/$PID/cwd" 2>/dev/null || echo "")
+          PROC_CMD=$(ps -p "$PID" -o args= 2>/dev/null || echo "")
+          if is_project_cwd "$PROC_CWD" && echo "$PROC_CMD" | grep -Fq "$PYTHON_BIN"; then
+            /usr/bin/kill "$PID" 2>/dev/null || true
+          fi
+        done
+        sleep 1
+
+        # Start API server
+        cd "{{.PROJECT_ROOT}}"
+        bash -c "nohup {{.PYTHON}} api/server.py > logs/api.log 2>&1 & echo \$! > data/.pids/api.pid"
+        API_PID=$(cat data/.pids/api.pid)
+        if ! ps -p "$API_PID" > /dev/null 2>&1; then
+          printf "\\033[31m[ERR]\\033[0m API server process stopped immediately\\n"
+          tail -n 50 logs/api.log || true
+          exit 1
+        fi
+        for i in $(seq 1 30); do
+          if curl -s "http://localhost:{{.API_PORT}}/api/health" > /dev/null 2>&1; then
+            break
+          fi
+          if ! ps -p "$API_PID" > /dev/null 2>&1; then
+            printf "\\033[31m[ERR]\\033[0m API server stopped during startup\\n"
+            tail -n 50 logs/api.log || true
+            exit 1
+          fi
+          sleep 0.5
+        done
+        if ! curl -s "http://localhost:{{.API_PORT}}/api/health" > /dev/null 2>&1; then
+          printf "\\033[31m[ERR]\\033[0m API health check timed out on localhost:{{.API_PORT}}\\n"
+          tail -n 50 logs/api.log || true
+          exit 1
+        fi
+        printf "\\033[32m[OK]\\033[0m API server gestart (pid=%s)\\n" "$API_PID"
+
+        # Start Frontend server
+        bash -c "nohup {{.PYTHON}} scripts/serve.py {{.FRONTEND_PORT}} > logs/frontend.log 2>&1 & echo \$! > data/.pids/frontend.pid"
+        FRONTEND_PID=$(cat data/.pids/frontend.pid)
+        if ! ps -p "$FRONTEND_PID" > /dev/null 2>&1; then
+          printf "\\033[31m[ERR]\\033[0m Frontend server process stopped immediately\\n"
+          tail -n 50 logs/frontend.log || true
+          exit 1
+        fi
+        for i in $(seq 1 30); do
+          if curl -s "http://localhost:{{.FRONTEND_PORT}}/" > /dev/null 2>&1; then
+            break
+          fi
+          if ! ps -p "$FRONTEND_PID" > /dev/null 2>&1; then
+            printf "\\033[31m[ERR]\\033[0m Frontend server stopped during startup\\n"
+            tail -n 50 logs/frontend.log || true
+            exit 1
+          fi
+          sleep 0.5
+        done
+        if ! curl -s "http://localhost:{{.FRONTEND_PORT}}/" > /dev/null 2>&1; then
+          printf "\\033[31m[ERR]\\033[0m Frontend health check timed out on localhost:{{.FRONTEND_PORT}}\\n"
+          tail -n 50 logs/frontend.log || true
+          exit 1
+        fi
+        printf "\\033[32m[OK]\\033[0m Frontend server gestart (pid=%s)\\n" "$FRONTEND_PID"
+
+        # Show URLs
+        printf "\\n\\033[1m[INFO]\\033[0m URLs:\\n"
+        printf "  Frontend:   http://localhost:%s\\n" "{{.FRONTEND_PORT}}"
+        printf "  API:        http://localhost:%s\\n" "{{.API_PORT}}"
+        printf "  API Docs:   http://localhost:%s/docs\\n" "{{.API_PORT}}"
+        printf "  Smart Sync: http://localhost:%s/smart-sync.html\\n" "{{.FRONTEND_PORT}}"
+        if [ -n "$VPN_IP" ]; then
+          printf "\n\033[1m[INFO]\033[0m VPN (%s):\n" "$VPN_IFACE"
+          printf "  Frontend:   http://%s:%s\\n" "$VPN_IP" "{{.FRONTEND_PORT}}"
+          printf "  API:        http://%s:%s\\n" "$VPN_IP" "{{.API_PORT}}"
+          printf "  Smart Sync: http://%s:%s/smart-sync.html\\n" "$VPN_IP" "{{.FRONTEND_PORT}}"
+        fi
+
+  stop:
+    desc: Stop app (all servers)
+    silent: true
+    cmds:
+      - |
+        PROJECT_ROOT="{{.PROJECT_ROOT}}"
+        PYTHON_BIN="{{.PYTHON}}"
+        is_project_cwd() {
+          case "$1" in
+            "$PROJECT_ROOT" | "$PROJECT_ROOT"/*) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
+        STOPPED=""
+
+        stop_pidfile_owned() {
+          LABEL="$1"
+          PID_FILE="$2"
+          SCRIPT_MATCH="$3"
+          if [ -f "$PID_FILE" ]; then
+            PID=$(cat "$PID_FILE")
+            if [ -n "$PID" ] && ps -p "$PID" >/dev/null 2>&1; then
+              PROC_CWD=$(readlink -f "/proc/$PID/cwd" 2>/dev/null || echo "")
+              PROC_CMD=$(ps -p "$PID" -o args= 2>/dev/null || echo "")
+              if is_project_cwd "$PROC_CWD" && echo "$PROC_CMD" | grep -Fq "$SCRIPT_MATCH"; then
+                if /usr/bin/kill "$PID" 2>/dev/null; then
+                  printf "\\033[32m[OK]\\033[0m %s gestopt (pid=%s)\\n" "$LABEL" "$PID"
+                  STOPPED="1"
+                fi
+              else
+                printf "\\033[33m[WARN]\\033[0m %s PID hoort niet bij dit project, skip\\n" "$LABEL"
+              fi
+            fi
+            rm -f "$PID_FILE"
+          fi
+        }
+
+        # Stop via PID files if owned by this project
+        stop_pidfile_owned "API server" "data/.pids/api.pid" "api/server.py"
+        stop_pidfile_owned "Frontend server" "data/.pids/frontend.pid" "scripts/serve.py"
+
+        # Fallback: only kill matching processes owned by this project
+        sleep 0.5
+        for PID in $(pgrep -f "api/server.py" 2>/dev/null || true); do
+          PROC_CWD=$(readlink -f "/proc/$PID/cwd" 2>/dev/null || echo "")
+          PROC_CMD=$(ps -p "$PID" -o args= 2>/dev/null || echo "")
+          if is_project_cwd "$PROC_CWD" && echo "$PROC_CMD" | grep -Fq "$PYTHON_BIN"; then
+            if /usr/bin/kill "$PID" 2>/dev/null; then
+              printf "\\033[32m[OK]\\033[0m Extra API proces gestopt (pid=%s)\\n" "$PID"
+              STOPPED="1"
+            fi
+          fi
+        done
+        for PID in $(pgrep -f "scripts/serve.py" 2>/dev/null || true); do
+          PROC_CWD=$(readlink -f "/proc/$PID/cwd" 2>/dev/null || echo "")
+          PROC_CMD=$(ps -p "$PID" -o args= 2>/dev/null || echo "")
+          if is_project_cwd "$PROC_CWD" && echo "$PROC_CMD" | grep -Fq "$PYTHON_BIN"; then
+            if /usr/bin/kill "$PID" 2>/dev/null; then
+              printf "\\033[32m[OK]\\033[0m Extra frontend proces gestopt (pid=%s)\\n" "$PID"
+              STOPPED="1"
+            fi
+          fi
+        done
+
+        if [ -z "$STOPPED" ]; then
+          printf "\\033[33m[WARN]\\033[0m Geen draaiende servers gevonden\\n"
+        fi
+
+  restart:
+    desc: Restart app
+    silent: false
+    cmds:
+      - task: stop
+      - sleep 1
+      - task: start
+
+  logs:
+    desc: Follow logs (all servers)
+    cmds:
+      - |
+        # Ensure log files exist
+        touch logs/api.log logs/frontend.log 2>/dev/null || mkdir -p logs && touch logs/api.log logs/frontend.log
+        printf "\\033[1;36m=== LOGS (Ctrl+C to exit) ===\\033[0m\\n\\n"
+        tail -f logs/api.log logs/frontend.log
+
+  status:
+    desc: Show service status
+    silent: false
+    cmds:
+      - |
+        VPN_IP="{{.VPN_IP}}"
+        VPN_IFACE=""
+        detect_vpn_ip() {
+          if [ -n "$VPN_IP" ]; then
+            VPN_IFACE="override"
+            return
+          fi
+
+          CANDIDATE_IP=$(ip -4 -o addr show dev tun0 up 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+          if [ -n "$CANDIDATE_IP" ]; then
+            VPN_IP="$CANDIDATE_IP"
+            VPN_IFACE="tun0"
+            return
+          fi
+
+          CANDIDATE_IP=$(ip -4 -o addr show dev wg0 up 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+          if [ -n "$CANDIDATE_IP" ]; then
+            VPN_IP="$CANDIDATE_IP"
+            VPN_IFACE="wg0"
+            return
+          fi
+
+          FALLBACK_LINE=$(ip -4 -o addr show up scope global 2>/dev/null | \
+            awk '$2 != "lo" {print $2" "$4}' | \
+            awk '$2 ~ /^10\.0\.0\.[0-9]+\// {print; exit}')
+          if [ -n "$FALLBACK_LINE" ]; then
+            VPN_IFACE=$(echo "$FALLBACK_LINE" | awk '{print $1}')
+            VPN_IP=$(echo "$FALLBACK_LINE" | awk '{print $2}' | cut -d/ -f1)
+          fi
+        }
+        detect_vpn_ip
+
+        # Runtime detection: sets global RUNTIME_RESULT
+        # Checks (in order): docker → pm2 → systemd → native
+        RUNTIME_RESULT=""
+        detect_runtime() {
+          DR_LABEL="$1"
+          DR_PID="$2"
+          DR_PORT="$3"
+          RUNTIME_RESULT="native  (nohup/achtergrond)"
+
+          # 1. Docker: check if a container is serving this port
+          # Use timeout to avoid hanging when the Docker daemon is not running
+          if command -v docker >/dev/null 2>&1; then
+            DCONT=$(timeout 2 docker ps 2>/dev/null | awk -v p=":$DR_PORT->" \
+              'NR>1 { for(i=1;i<=NF;i++) if (index($i,p)) { print $NF; break } }' | head -n1)
+            if [ -n "$DCONT" ]; then
+              RUNTIME_RESULT="docker  (container: $DCONT)"
+              return
+            fi
+          fi
+
+          # 2. PM2: check if the process parent is the PM2 daemon
+          if [ -n "$DR_PID" ] && command -v pm2 >/dev/null 2>&1; then
+            DR_PPID=$(ps -p "$DR_PID" -o ppid= 2>/dev/null | tr -d ' ')
+            if [ -n "$DR_PPID" ]; then
+              DR_PARENT=$(ps -p "$DR_PPID" -o args= 2>/dev/null || echo "")
+              if echo "$DR_PARENT" | grep -q "pm2"; then
+                RUNTIME_RESULT="pm2"
+                return
+              fi
+            fi
+          fi
+
+          # 3. Systemd: check common unit names for this project
+          if command -v systemctl >/dev/null 2>&1; then
+            for DR_UNIT in "bingel-kucu-$DR_LABEL" "bingel-kucu" "{{.APP_NAME}}-$DR_LABEL" "{{.APP_NAME}}"; do
+              if systemctl is-active --quiet "$DR_UNIT" 2>/dev/null; then
+                RUNTIME_RESULT="systemd (unit: $DR_UNIT)"
+                return
+              fi
+            done
+          fi
+
+          # 4. Not running or unknown
+          if [ -z "$DR_PID" ]; then
+            RUNTIME_RESULT="--"
+          fi
+        }
+
+        printf "\\n\\033[1;36m=== SERVICE STATUS ===\\033[0m\\n\\n"
+
+        # Check Frontend server
+        if [ -f data/.pids/frontend.pid ]; then
+          FRONTEND_PID=$(cat data/.pids/frontend.pid)
+          if ps -p $FRONTEND_PID > /dev/null 2>&1; then
+            detect_runtime "frontend" "$FRONTEND_PID" "{{.FRONTEND_PORT}}"
+            printf "\\033[32m[OK]\\033[0m Frontend Server: running (pid=%s)\\n" "$FRONTEND_PID"
+            printf "   Via:             %s\\n" "$RUNTIME_RESULT"
+            printf "   URL:             http://localhost:%s\\n" "{{.FRONTEND_PORT}}"
+            if [ -n "$VPN_IP" ]; then
+              printf "   VPN (%s):        http://%s:%s\\n" "$VPN_IFACE" "$VPN_IP" "{{.FRONTEND_PORT}}"
+            fi
+            if curl -s --max-time 3 "http://localhost:{{.FRONTEND_PORT}}" > /dev/null 2>&1; then
+              printf "   Health:          \\033[32mOK\\033[0m\\n"
+            else
+              printf "   Health:          \\033[33mno response\\033[0m\\n"
+            fi
+          else
+            printf "\\033[31m[ERR]\\033[0m Frontend Server: not running (stale pid)\\n"
+            rm -f data/.pids/frontend.pid
+          fi
+        else
+          detect_runtime "frontend" "" "{{.FRONTEND_PORT}}"
+          printf "\\033[33m[WARN]\\033[0m Frontend Server: not running\\n"
+          if [ "$RUNTIME_RESULT" != "--" ]; then
+            printf "   Via:             %s\\n" "$RUNTIME_RESULT"
+          fi
+        fi
+
+        printf "\\n"
+
+        # Check API server
+        if [ -f data/.pids/api.pid ]; then
+          API_PID=$(cat data/.pids/api.pid)
+          if ps -p $API_PID > /dev/null 2>&1; then
+            detect_runtime "api" "$API_PID" "{{.API_PORT}}"
+            printf "\\033[32m[OK]\\033[0m API Server:      running (pid=%s)\\n" "$API_PID"
+            printf "   Via:             %s\\n" "$RUNTIME_RESULT"
+            printf "   URL:             http://localhost:%s\\n" "{{.API_PORT}}"
+            if [ -n "$VPN_IP" ]; then
+              printf "   VPN (%s):        http://%s:%s\\n" "$VPN_IFACE" "$VPN_IP" "{{.API_PORT}}"
+            fi
+            if curl -s --max-time 3 "http://localhost:{{.API_PORT}}/api/health" > /dev/null 2>&1; then
+              printf "   Health:          \\033[32mOK\\033[0m\\n"
+            else
+              printf "   Health:          \\033[33mno response\\033[0m\\n"
+            fi
+          else
+            printf "\\033[31m[ERR]\\033[0m API Server:      not running (stale pid)\\n"
+            rm -f data/.pids/api.pid
+          fi
+        else
+          detect_runtime "api" "" "{{.API_PORT}}"
+          printf "\\033[33m[WARN]\\033[0m API Server:      not running\\n"
+          if [ "$RUNTIME_RESULT" != "--" ]; then
+            printf "   Via:             %s\\n" "$RUNTIME_RESULT"
+          fi
+        fi
+
+        printf "\\n"
+
+  monitor:
+    desc: Temporarily monitor frontend/API health and process state
+    silent: false
+    cmds:
+      - 'INTERVAL={{default "5" .INTERVAL}} COUNT={{default "0" .COUNT}} FRONTEND_PORT={{.FRONTEND_PORT}} API_PORT={{.API_PORT}} ./scripts/monitor_dev_health.sh'
+
+  monitor:once:
+    desc: Capture one frontend/API health sample
+    silent: false
+    cmds:
+      - 'INTERVAL=1 COUNT=1 FRONTEND_PORT={{.FRONTEND_PORT}} API_PORT={{.API_PORT}} ./scripts/monitor_dev_health.sh'
+
+  frontend:stack:
+    desc: Dump frontend Python stack to logs/frontend.log
+    silent: false
+    cmds:
+      - |
+        if [ ! -f data/.pids/frontend.pid ]; then
+          echo "No frontend PID file found."
+          exit 1
+        fi
+        FRONTEND_PID="$(cat data/.pids/frontend.pid)"
+        if ! ps -p "$FRONTEND_PID" >/dev/null 2>&1; then
+          echo "Frontend PID is not running: $FRONTEND_PID"
+          exit 1
+        fi
+        /usr/bin/kill -USR1 "$FRONTEND_PID"
+        echo "Stack dump requested for frontend pid=$FRONTEND_PID."
+        echo "Read it with: tail -n 80 logs/frontend.log"

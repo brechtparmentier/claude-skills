@@ -1,0 +1,86 @@
+# taskfiles/project.yml — Python profile project layer
+# Stack: uv (package manager) + ruff (lint+format in 1 tool) + pytest
+# Less is more: geen mypy/black/pylint default — alleen wat echt nodig is
+version: '3'
+silent: true
+
+vars:
+  UV: '{{default "uv" .UV}}'
+  PY_SOURCES: '{{default "src" .PY_SOURCES}}'
+  TEST_DIR: '{{default "tests" .TEST_DIR}}'
+
+tasks:
+  # ════════════════════════════════════════════════════════════════════════════
+  # TESTING
+  # ════════════════════════════════════════════════════════════════════════════
+  test:
+    desc: Run tests (pytest)
+    silent: false
+    cmds:
+      - '{{.UV}} run pytest {{.TEST_DIR}}'
+
+  test-watch:
+    desc: Run tests in watch mode (pytest-watch)
+    silent: false
+    cmds:
+      - '{{.UV}} run ptw {{.TEST_DIR}}'
+
+  test-coverage:
+    desc: Run tests met coverage
+    silent: false
+    cmds:
+      - '{{.UV}} run pytest --cov={{.PY_SOURCES}} --cov-report=term-missing {{.TEST_DIR}}'
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # CODE QUALITY (ruff = lint + format in één tool)
+  # ════════════════════════════════════════════════════════════════════════════
+  lint:
+    desc: Lint code (ruff check)
+    silent: false
+    cmds:
+      - '{{.UV}} run ruff check {{.PY_SOURCES}}'
+
+  lint-fix:
+    desc: Auto-fix lint issues (ruff check --fix)
+    silent: false
+    cmds:
+      - '{{.UV}} run ruff check --fix {{.PY_SOURCES}}'
+
+  format:
+    desc: Format code (ruff format)
+    silent: false
+    cmds:
+      - '{{.UV}} run ruff format {{.PY_SOURCES}}'
+
+  format-check:
+    desc: Check formatting (geen wijzigingen)
+    silent: false
+    cmds:
+      - '{{.UV}} run ruff format --check {{.PY_SOURCES}}'
+
+  check:
+    desc: Lint + format-check
+    silent: false
+    cmds:
+      - task: lint
+      - task: format-check
+      - printf "\033[32m[OK]\033[0m alle checks geslaagd\n"
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # OPTIONEEL — uncomment indien gewenst
+  # ════════════════════════════════════════════════════════════════════════════
+  # type-check:
+  #   desc: Type-check (mypy) — opt-in
+  #   silent: false
+  #   cmds:
+  #     - '{{.UV}} run mypy {{.PY_SOURCES}}'
+
+  # lock:
+  #   desc: Update uv.lock
+  #   cmds:
+  #     - '{{.UV}} lock'
+
+  # upgrade:
+  #   desc: Upgrade alle dependencies
+  #   cmds:
+  #     - '{{.UV}} sync --upgrade'
