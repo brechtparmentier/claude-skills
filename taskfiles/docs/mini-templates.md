@@ -1,4 +1,4 @@
-<!-- v1.0.0 — 2026-05-03 -->
+<!-- v1.1.1 — 2026-05-03 -->
 <!-- Onderdeel van: taskfiles skill — zie SKILL.md voor index -->
 
 ## §11 — Werkende mini-templates
@@ -44,7 +44,7 @@ tasks:
   logs:     { desc: Tail logs,           cmds: [task: core:logs] }
   status:   { desc: Runtime status,      cmds: [task: core:status] }
   doctor:   { desc: Diagnose,            cmds: [task: core:doctor] }
-  setup:    { desc: First-time setup,    cmds: [task: project:setup] }
+  setup:    { desc: First-time setup,    cmds: [task: core:setup] }
 
   install:    { desc: Install deps,    cmds: [task: project:install] }
   build:      { desc: Production build, cmds: [task: project:build] }
@@ -181,6 +181,8 @@ doctor:
 ```
 
 ### Template — dynamische help-renderer (printf-stijl)
+
+> **Waarom geen `task --list`?** Deze skill kiest **bewust** voor handgeschreven printf-help i.p.v. de automatische `task --list` output. Reden: `task --list` toont alleen tasks met `desc:` in alfabetische volgorde, **zonder** sectie-headers ("Lifecycle", "Project", "Database"), **zonder** dynamische context (mode, url, ports), en **zonder** kleur-onderscheid tussen lifecycle/project/maintenance. De printf-aanpak hieronder geeft de gebruiker direct waar hij is (welke poort, welke mode, welke vpn-url) en groepeert commands logisch. Tijdens AUDIT geeft dit een -2 voor "statische help" — dat is een **bekende false-positive** voor deze skill, niet drift.
 
 ```yaml
 help:

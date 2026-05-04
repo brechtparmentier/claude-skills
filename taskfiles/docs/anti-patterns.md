@@ -1,4 +1,4 @@
-<!-- v1.1.0 — 2026-05-03 -->
+<!-- v1.1.1 — 2026-05-03 -->
 <!-- Onderdeel van: taskfiles skill — zie SKILL.md voor index -->
 
 ## §5b — Anti-pattern detectie
@@ -18,9 +18,9 @@ Run deze checks bij AUDIT en bij elke generatie als sanity-check.
 | AP-09 | ANSI-codes inconsistent gemixt binnen 1 file | laag |
 | AP-10 | `task: core:help` zonder `silent: false` op wrapper | medium |
 | AP-11 | Mixed naming binnen één repo (`build:docker-full`, `setup:venv`, `installDeps`) | medium |
-| AP-12 | Geen `doctor:` task | medium |
+| AP-12 | Geen `doctor:` task **als root-shortcut** (niet alleen `core:doctor`) | medium |
 | AP-13 | Geen `default:` of `default → help` ontbreekt | medium |
-| AP-14 | Geen `setup:` task (gebruiker moet zelf raden) | medium |
+| AP-14 | Geen `setup:` task **als root-shortcut** (niet alleen `core:setup`) | medium |
 | AP-15 | Gen-1 of gen-2 core.yml structuur (geen `_ensure-ready`/`_kill-mode`/`_wait-for-endpoint`) | medium |
 | AP-16 | `.task/`, `.taskrun/`, `.run/` mix binnen project | laag |
 | AP-17 | Hardcoded paden naar HOME of repo-root | hoog |
@@ -37,6 +37,42 @@ Run deze checks bij AUDIT en bij elke generatie als sanity-check.
 | AP-28 | Twee+ services claimen dezelfde port-waarde (cross-language port-conflict) | **hoog** |
 
 Bij audit toon je gevonden anti-patterns met regelnummer + concrete fix.
+
+### Toelichting bij AP-12 / AP-13 / AP-14 — Pattern A root-facade compleetheid
+
+In Pattern A is de root `Taskfile.yml` een **thin facade** die forwarded naar `core:*` en `project:*`. Gebruikers typen altijd `task <command>` vanuit de root — nooit `task core:<command>` of `task project:<command>`.
+
+**Detectie-regel** (aangescherpt in v1.1.1):
+
+Een task telt alleen als "aanwezig" wanneer hij **als root-shortcut** beschikbaar is. `core:doctor` of `project:setup` op zichzelf is **niet voldoende** — er moet een corresponderende top-level entry in de root `Taskfile.yml` staan die ernaar forwarded.
+
+**Fout (AP-12 triggert ondanks `core:doctor`):**
+
+```yaml
+# Taskfile.yml (root) — geen 'doctor:' shortcut
+includes:
+  core: { taskfile: ./taskfiles/core.yml }
+tasks:
+  start: { cmds: [task: core:start] }
+  stop:  { cmds: [task: core:stop] }
+  # ← doctor ontbreekt; gebruiker krijgt "Task 'doctor' does not exist"
+```
+
+**Goed:**
+
+```yaml
+tasks:
+  start:  { cmds: [task: core:start] }
+  stop:   { cmds: [task: core:stop] }
+  doctor: { cmds: [task: core:doctor] }   # ← verplicht
+  setup:  { cmds: [task: core:setup] }    # ← verplicht
+```
+
+**Verplichte root-shortcuts per profile** (zie `docs/profiles.md` "Verplicht"-lijst per profile). De skill mag een profile pas als compleet gegenereerd beschouwen wanneer **alle** items uit de "Verplicht"-lijst als root-shortcut bestaan, niet alleen via include indirect bereikbaar zijn.
+
+**Validatie:** zie `docs/validation-checklist.md` — de root-shortcut-check is sinds v1.1.1 verplicht onderdeel van elke generatie/refactor.
+
+---
 
 ### Toelichting bij AP-21 t/m AP-25 — go-task / gosh-context
 

@@ -5,7 +5,7 @@
 #   taskfiles/project.yml   projectspecifiek: build, lint, test, format
 version: '3'
 silent: true
-dotenv: ['.env', '.env.local']
+dotenv: ['.env.local', '.env']
 
 includes:
   core:

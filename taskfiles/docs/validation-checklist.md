@@ -1,4 +1,4 @@
-<!-- v1.0.0 — 2026-05-03 -->
+<!-- v1.1.1 — 2026-05-03 -->
 <!-- Onderdeel van: taskfiles skill — zie SKILL.md voor index -->
 
 ## §10 — Validatiechecklist
@@ -41,6 +41,20 @@ Voor elke gegenereerde of gerefactorde set, run mentaal:
 - [ ] **`calcport` in doctor required-tools** (AP-27)
 - [ ] **`PORTS_FILE` var aanwezig** met default `'ports.json'`
 - [ ] **Bij NEW project zonder ports.json**: skill heeft `calcport` aangeraden of een minimale `ports.json` gegenereerd
+
+**Root-facade compleetheid (Pattern A — kritiek, sinds v1.1.1):**
+
+Een task in `core:*` of `project:*` is **niet voldoende** — er moet een corresponderende root-shortcut bestaan.
+
+- [ ] **Alle "Verplicht"-tasks uit het gekozen profile** (zie `docs/profiles.md`) zijn als root-shortcut beschikbaar — niet alleen via `core:*`/`project:*` indirect bereikbaar
+- [ ] **Specifiek altijd verplicht in root** (Pattern A): `default`, `help`, `start`, `stop`, `restart`, `status`, `logs`, `doctor`, `setup`, `install`, `build`, `test`, `lint`, `check`, `clean`, `ports`
+- [ ] **Test:** `task --list` (of `task` zonder args) toont alle root-shortcuts. Verifieer dat **`task doctor`** en **`task setup`** beide werken — dit zijn de meest-vergeten shortcuts
+- [ ] **Geen redundante project-aliases** voor wat root al biedt (bv. `project:dev` als alias voor `task start` is verwarrend → schrappen)
+
+**Destructieve clean-tasks (sinds v1.1.1):**
+
+- [ ] `task clean` verwijdert **alleen** build-artefacten (`.next/`, `dist/`, `out/`, `coverage/`)
+- [ ] `task clean` verwijdert **niet** `.task/` (runtime), `node_modules/`, `.venv/` — die zijn voor `clean:all` of `clean:deps` (toekomstige AP-29)
 
 Toon checklist-resultaat aan gebruiker. Falen = blokkeren tot opgelost.
 

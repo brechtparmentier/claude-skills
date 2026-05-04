@@ -19,6 +19,32 @@ Bij elke wijziging: bump versie in `SKILL.md` frontmatter (`version` + `updated`
 
 ---
 
+## [1.1.1] — 2026-05-03
+
+### Fixed — drift in canonical reference (kritiek)
+- **`references/canonical/Taskfile.yml`** regel 8: `dotenv: ['.env', '.env.local']` → `['.env.local', '.env']`. De skill rapporteerde AP-07 maar leverde zelf een buggy template — propageerde de bug bij elke STANDAARD/NEW. Real-run trigger: AUDIT op `nextjs_workspaceSpotifySingleAudioController` vond AP-07 in een Taskfile die rechtstreeks van canonical was afgeleid.
+- **`references/canonical/taskfiles/core.yml`** vars: `RUNTIME_DIR`, `LOGS_DIR`, `DEV_LOG`, `PROD_LOG` van `.taskrun/...` → `.task/...` (drift-correctie #2 uit `references/README.md` is nu in canonical zelf toegepast).
+
+### Changed — anti-pattern detection scope-aanscherping
+- **AP-12** (geen doctor): aangescherpt naar "geen `doctor:` als root-shortcut". `core:doctor` op zichzelf voldoet niet meer — Pattern A vereist een root-facade entry die ernaar forwarded.
+- **AP-14** (geen setup): zelfde aanscherping voor `setup:`.
+- Nieuwe toelichting-sectie in `docs/anti-patterns.md` voor AP-12/13/14 met fout/goed-voorbeelden van root-facade compleetheid.
+
+### Added — validatiechecklist uitgebreid
+- **Root-facade compleetheid** sectie: alle "Verplicht"-tasks uit het profile moeten als root-shortcut bestaan. Specifieke checks voor `task doctor` en `task setup` (meest-vergeten shortcuts in real-run).
+- **Destructieve clean-tasks** sectie: `task clean` mag alleen build-artefacten verwijderen, niet `.task/`/`node_modules/`/`.venv/` (preview van komende AP-29 in v1.2.0).
+
+### Documented
+- **`docs/mini-templates.md`** help-renderer: expliciete uitleg waarom printf-stijl gekozen is i.p.v. `task --list` (bewuste keuze voor sectie-headers, dynamische context, kleur-onderscheid). Bekende -2 in audit-scoring is **false-positive** voor deze skill.
+
+### Real-run validation
+- AUDIT op `nextjs_workspaceSpotifySingleAudioController` (`linuxpc92`/Kubuntu-NUC):
+  - Score: 83/100 → FIX-modus correct gekozen
+  - Gevonden bugs in skill zelf: AP-12/14 detection-rule te zwak, canonical met dotenv-drift
+  - Beide gefixt in deze release
+
+---
+
 ## [1.1.0] — 2026-05-03
 
 ### Changed — anti-pattern detection scope-uitbreiding

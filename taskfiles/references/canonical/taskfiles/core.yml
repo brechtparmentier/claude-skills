@@ -18,10 +18,10 @@ vars:
   DEV_KEY_FILE: certificates/localhost-key.pem
 
   # ── Runtime paden ─────────────────────────────────────────────────────────
-  RUNTIME_DIR: .taskrun
-  LOGS_DIR: .taskrun/logs
-  DEV_LOG: .taskrun/logs/dev.log
-  PROD_LOG: .taskrun/logs/prod.log
+  RUNTIME_DIR: .task
+  LOGS_DIR: .task/logs
+  DEV_LOG: .task/logs/dev.log
+  PROD_LOG: .task/logs/prod.log
 
   # ── Ports (uit port.config.json) ──────────────────────────────────────────
   DEV_PORT: '44007'
