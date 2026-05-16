@@ -4,6 +4,12 @@
 # Usage:
 #   ./install.sh                # alle skills
 #   ./install.sh taskfiles      # alleen taskfiles skill
+#
+# VS Code Remote SSH gebruikers (Windows host → Linux remote):
+#   Run dit script ZOWEL op je Windows machine (Git Bash) als op elke Linux remote.
+#   - Windows install → Copilot global instructions in %APPDATA%\Code\User\prompts\
+#   - Linux install   → Copilot via VS Code Server in ~/.vscode-server/data/User/prompts/
+#                       + Claude Code + Codex adapters
 set -euo pipefail
 
 REPO_URL="https://github.com/brechtparmentier/claude-skills.git"
@@ -63,7 +69,11 @@ for skill in "${SKILLS[@]}"; do
     mv "$dst" "${dst}.backup-${ts}"
   fi
 
-  ln -sfn "$src" "$dst"
+  # Windows: symlinks vereisen Developer Mode — gebruik cp als fallback
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) cp -r "$src" "$dst" ;;
+    *)                    ln -sfn "$src" "$dst" ;;
+  esac
   version="$(grep '^version:' "$src/SKILL.md" 2>/dev/null | head -1 | awk '{print $2}')"
   printf "\033[32m[OK]\033[0m %s v%s → %s\n" "$skill" "${version:-?}" "$dst"
 done
@@ -74,16 +84,41 @@ printf "Test in een nieuwe Cowork/Claude Code sessie.\n"
 # Stap 4 — tool-adapters (Copilot .instructions.md + Codex AGENTS.md)
 # Per skill: installeer adapter-bestanden naar de juiste tool-locaties.
 
-detect_vscode_prompts_dir() {
-  case "$(uname -s)" in
-    Linux*)          echo "${HOME}/.config/Code/User/prompts" ;;
-    Darwin*)         echo "${HOME}/Library/Application Support/Code/User/prompts" ;;
-    MINGW*|MSYS*|CYGWIN*) echo "${APPDATA:-$HOME/AppData/Roaming}/Code/User/prompts" ;;
-    *)               echo "" ;;
-  esac
+# Detecteer of we op Windows draaien (Git Bash / MSYS2)
+is_windows() {
+  case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; *) return 1 ;; esac
 }
 
-VSCODE_PROMPTS="$(detect_vscode_prompts_dir)"
+# Op Windows: symlinks vereisen Developer Mode of admin — gebruik cp
+_link_or_copy() {
+  local src="$1" dst="$2"
+  if is_windows; then
+    cp -r "$src" "$dst"
+  else
+    ln -sfn "$src" "$dst"
+  fi
+}
+
+detect_vscode_prompts_dirs() {
+  # Geeft alle relevante VS Code prompts-mappen terug (spatie-gescheiden), afhankelijk van OS
+  local dirs=()
+  case "$(uname -s)" in
+    Linux*)
+      # Lokale VS Code installatie (als aanwezig)
+      dirs+=("${HOME}/.config/Code/User/prompts")
+      # VS Code Server — wordt gebruikt bij Remote SSH vanuit Windows
+      dirs+=("${HOME}/.vscode-server/data/User/prompts")
+      ;;
+    Darwin*)
+      dirs+=("${HOME}/Library/Application Support/Code/User/prompts")
+      ;;
+    MINGW*|MSYS*|CYGWIN*)
+      # Lokale Windows VS Code — dit is wat Copilot laadt als host bij Remote SSH
+      dirs+=("${APPDATA:-$HOME/AppData/Roaming}/Code/User/prompts")
+      ;;
+  esac
+  printf '%s\n' "${dirs[@]}"
+}
 
 _install_adapter() {
   local src="$1" dst="$2" label="$3"
@@ -93,29 +128,40 @@ _install_adapter() {
     rm "$dst"
   elif [ -e "$dst" ]; then
     ts="$(date +%Y%m%d_%H%M%S)"
-    printf "\033[33m[WARN]\033[0m %s bestaat (geen symlink) → .backup-%s\n" "$dst" "$ts"
+    printf "\033[33m[WARN]\033[0m %s bestaat → .backup-%s\n" "$dst" "$ts"
     mv "$dst" "${dst}.backup-${ts}"
   fi
-  ln -sfn "$src" "$dst"
-  printf "\033[32m[OK]\033[0m %-12s → %s\n" "$label" "$dst"
+  _link_or_copy "$src" "$dst"
+  printf "\033[32m[OK]\033[0m %-16s → %s\n" "$label" "$dst"
 }
 
 for skill in "${SKILLS[@]}"; do
   src_dir="$CACHE_DIR/$skill"
 
-  # Copilot .instructions.md → VS Code user prompts
+  # Copilot .instructions.md → alle relevante VS Code prompts-mappen
   copilot_src="${src_dir}/${skill}.instructions.md"
-  if [ -f "$copilot_src" ] && [ -n "$VSCODE_PROMPTS" ]; then
-    _install_adapter "$copilot_src" "${VSCODE_PROMPTS}/${skill}.instructions.md" "Copilot"
+  if [ -f "$copilot_src" ]; then
+    while IFS= read -r prompts_dir; do
+      [ -z "$prompts_dir" ] && continue
+      label="Copilot"
+      # Onderscheid lokale vs. server installatie in label
+      [[ "$prompts_dir" == *vscode-server* ]] && label="Copilot(SSH)"
+      _install_adapter "$copilot_src" "${prompts_dir}/${skill}.instructions.md" "$label"
+    done < <(detect_vscode_prompts_dirs)
   fi
 
-  # Codex / Claude Code AGENTS.md → ~/.codex/AGENTS/<skill>.md
+  # Codex AGENTS.md
   agents_src="${src_dir}/AGENTS.md"
-  codex_dst="${HOME}/.codex/AGENTS/${skill}.md"
   if [ -f "$agents_src" ]; then
-    _install_adapter "$agents_src" "$codex_dst" "Codex"
-    # Maak ook ~/.claude/AGENTS/<skill>.md aan voor Claude Code
-    claude_agents_dst="${HOME}/.claude/AGENTS/${skill}.md"
-    _install_adapter "$agents_src" "$claude_agents_dst" "ClaudeCode"
+    _install_adapter "$agents_src" "${HOME}/.codex/AGENTS/${skill}.md"   "Codex"
+    _install_adapter "$agents_src" "${HOME}/.claude/AGENTS/${skill}.md"  "ClaudeCode"
   fi
 done
+
+# Reminder voor Remote SSH gebruikers op Linux
+if ! is_windows && [ -d "${HOME}/.vscode-server" ]; then
+  printf "\n\033[1;36m[TIP]\033[0m VS Code Server gedetecteerd.\n"
+  printf "      Copilot(SSH) adapter geïnstalleerd in ~/.vscode-server/data/User/prompts/\n"
+  printf "      Voer dit script ook uit op je Windows host (Git Bash) voor global Copilot support:\n"
+  printf "      curl -sL 'https://raw.githubusercontent.com/brechtparmentier/claude-skills/main/install.sh' | bash\n"
+fi

@@ -8,13 +8,13 @@ set -uo pipefail
 
 # ── Servers (aliases uit ~/.ssh/config) ──────────────────────────────────────
 SERVERS=(
-  kubuntu-nuc
+  kubuntunuc
   linuxoptiplexvpn
   linuxoptiplexpagaaiervpn
-  linuxpc92
+  linuxpc92vpn
   linodeserver
-  linux-pagaaier
-  linux-gbsodk
+  linuxpagaaiervpn
+  linuxgbsodkvpn
 )
 
 # ── Optioneel: alleen specifieke skill updaten ───────────────────────────────
