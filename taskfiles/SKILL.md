@@ -1,6 +1,6 @@
 ---
 name: taskfiles
-version: 1.1.1
+version: 1.2.0
 updated: 2026-05-03
 description: >
   Activeer deze skill wanneer de gebruiker een Taskfile.yml wil maken, auditen, fixen, standaardiseren
@@ -163,15 +163,30 @@ Bij REFACTOR/STANDAARD: bewaar oude file als `.archive/Taskfile.legacy.yml`. Too
 
 ### Confirmation-gates (cruciaal)
 
+**Uitvoeringsregel (sinds v1.2.0):** als de gebruiker een **uitvoerend werkwoord** gebruikt — "maak", "fix", "verbeter", "pas aan", "genereer", "bouw", "herstel", "doe", "zet op" — voer dan **direct uit zonder akkoordvraag**. De opdracht is impliciet bevestigd. Toon achteraf wat er gewijzigd is + de validatie-resultaten (zie Output-regel in `flows/standard.md`).
+
 | Actie | Risico | Confirmation |
 |---|---|---|
 | AUDIT (read-only output) | nul | nooit |
 | NEW (nieuwe files in lege project) | nul | alleen onmisbare info vragen |
-| FIX (kleine diffs) | laag | toon diff, ga door tenzij user stopt |
-| STANDAARD (bulk modernize) | middel | toon plan vooraf, vraag expliciet confirm |
+| FIX (kleine diffs) | laag | direct uitvoeren, toon achteraf de diff |
+| STANDAARD (niet-destructief) | middel | direct uitvoeren bij uitvoerend werkwoord, toon achteraf samenvatting |
+| STANDAARD (met overschrijven of legacy-archive) | middel-hoog | toon plan vooraf, vraag confirm |
 | REFACTOR (structureel) | hoog | toon plan + impact, vraag expliciet confirm + bewaar legacy |
 
-**AUTO mag niet blind zijn.** Voor middel/hoog risico altijd vooraf tonen wat gaat gebeuren.
+**Confirmation alleen vragen bij:**
+- Destructieve acties (verwijderen van runtime-dir, `node_modules`, `.venv`, database-data)
+- Dataverlies (overschrijven van user-config zonder backup)
+- Blinde overschrijving van een bestaand niet-Taskfile bestand (zie Bestaande-bestanden-regel in `docs/never-do.md`)
+- **Echte inhoudelijke twijfel** (ambigue opdracht waar twee redelijk-tegenstrijdige interpretaties bestaan)
+
+**Confirmation NIET vragen bij:**
+- Patchen van bestaande Taskfile-bestanden volgens skill-conventies
+- Toevoegen van ontbrekende vars/tasks/includes
+- Aanmaken van bestanden die nog niet bestonden
+- Corrigeren van anti-patterns die de gebruiker expliciet vroeg te fixen
+
+**AUTO mag niet blind zijn voor risico — maar wel besluitvaardig.** Voor de meeste praktijkgevallen: gewoon uitvoeren en achteraf rapporteren.
 
 ---
 
@@ -228,25 +243,4 @@ Wanneer geactiveerd:
 2. Alleen als user expliciet een modus benoemt (Activatie-tabel), lees direct de bijhorende sub-file.
 3. **Lees sub-files just-in-time** — niet alles vooraf inladen. SKILL.md geeft de routing,
    sub-files de details.
-4. Hard rules zijn niet onderhandelbaar. Geen "wil je dit anders?"-checks op vaste conventies.
-5. Confirmation-gates respecteren:
-   - AUDIT/NEW/FIX = ga door zonder uitgebreid checken
-   - STANDAARD/REFACTOR = toon plan vooraf, vraag expliciet confirm
-6. Toon altijd onderaan **één concrete volgende stap** (`task doctor`, `task start`, "commit deze 3 files").
-7. Bij twijfel: kies de meest robuuste default uit `docs/fallbacks.md` en vermeld het.
-8. Bij conflict tussen gebruikers-voorkeur en hard rule: leg uit waarom de hard rule geldt.
-9. ADD-vriendelijk: weinig vragen, veel momentum. Liever proberen + tonen dan questionnaires.
-10. Bij elke wijziging aan deze skill: bump versie in frontmatter + entry in `CHANGELOG.md`.
-
----
-
-## Versionering
-
-Skill volgt [Semver](https://semver.org/) en [Keep a Changelog](https://keepachangelog.com/).
-
-- **MAJOR** (1.0.0 → 2.0.0): breaking change in skill-conventies (nieuwe modus, hard rule wijzigt)
-- **MINOR** (1.0.0 → 1.1.0): nieuw profile, nieuwe optionele module, nieuwe anti-pattern, nieuwe drift-correctie
-- **PATCH** (1.0.0 → 1.0.1): verduidelijking, typo, kleine bugfix in voorbeeld-snippet
-
-Zie `CHANGELOG.md` voor wijziging-historie.
-Voor de pre-refactor monolithische versie zie `skill.legacy.md`.
+4. Hard rules zijn ni

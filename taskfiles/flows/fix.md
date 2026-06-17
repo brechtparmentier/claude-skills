@@ -1,4 +1,4 @@
-<!-- v1.1.0 — 2026-05-03 -->
+<!-- v1.2.0 — 2026-05-03 -->
 <!-- Onderdeel van: taskfiles skill — zie SKILL.md voor index -->
 
 ## §7A — FIX-flow
@@ -6,6 +6,10 @@
 Gegeven: bestaande Taskfile + één concreet probleem (van user benoemd, of geïdentificeerd door §5b anti-pattern detectie binnen AUTO).
 
 **Scope:** punctueel. Geen pattern-wijziging, geen file-restructuring. Kleine diffs op specifieke plekken.
+
+**Uitvoeringsregel (sinds v1.2.0):** bij uitvoerend werkwoord ("fix", "pas aan", "verbeter", "herstel") → **direct uitvoeren**, geen "Akkoord?"-vraag. Toon achteraf de diff + validatie volgens `flows/standard.md` §7B.6 Output-regel. Zie AP-35.
+
+**Bestaande-bestanden-regel (sinds v1.2.0):** zie `flows/standard.md` §7B.2. Lees eerst, patch gericht, geen blinde overschrijving. Zie AP-34.
 
 **Stap 1 — Locate** Lees de file, identificeer **exact** waar het probleem zit (regelnummer of task-naam).
 

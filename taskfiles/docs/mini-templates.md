@@ -1,4 +1,4 @@
-<!-- v1.1.1 — 2026-05-03 -->
+<!-- v1.2.0 — 2026-05-03 -->
 <!-- Onderdeel van: taskfiles skill — zie SKILL.md voor index -->
 
 ## §11 — Werkende mini-templates
@@ -273,3 +273,164 @@ tasks:
 
 ---
 
+
+### Template — Postgres + Prisma `taskfiles/db.yml` (sinds v1.2.0)
+
+Drop-in template voor projecten met Prisma + Postgres in `docker-compose.yml`. Host-poort komt uit `ports.json` `database.docker_dev` — **nooit** hardcoded `5432:5432` (zie AP-30/31).
+
+```yaml
+version: '3'
+silent: true
+
+vars:
+  # Container-side blijft altijd 5432; host-poort uit ports.json
+  DB_HOST_PORT:
+    sh: |
+      if [ -f ports.json ]; then
+        python3 -c 'import json; print(json.load(open("ports.json")).get("database",{}).get("docker_dev",5432))' 2>/dev/null || echo 5432
+      else
+        echo 5432
+      fi
+  DB_USER: '{{default "postgres" .DB_USER}}'
+  DB_PASS: '{{default "postgres" .DB_PASS}}'
+  DB_NAME: '{{default "app" .DB_NAME}}'
+  DB_HEALTHCHECK_TIMEOUT: '30'
+
+tasks:
+  up:
+    desc: Start Postgres container
+    silent: false
+    cmds:
+      - docker compose up -d postgres
+      - task: healthcheck
+
+  down:
+    desc: Stop Postgres container
+    silent: false
+    cmds:
+      - docker compose stop postgres
+
+  status:
+    desc: Postgres healthcheck via pg_isready
+    silent: false
+    cmds:
+      - |
+        if pg_isready -h localhost -p {{.DB_HOST_PORT}} -U {{.DB_USER}} >/dev/null 2>&1; then
+          printf "\033[32m[OK]\033[0m Postgres reageert op localhost:{{.DB_HOST_PORT}}\n"
+        else
+          printf "\033[31m[X]\033[0m Postgres NIET bereikbaar op localhost:{{.DB_HOST_PORT}}\n"
+          exit 1
+        fi
+
+  healthcheck:
+    desc: Poll pg_isready totdat Postgres up is (max DB_HEALTHCHECK_TIMEOUT s)
+    silent: false
+    cmds:
+      - |
+        ELAPSED=0
+        while [ $ELAPSED -lt {{.DB_HEALTHCHECK_TIMEOUT}} ]; do
+          if pg_isready -h localhost -p {{.DB_HOST_PORT}} -U {{.DB_USER}} >/dev/null 2>&1; then
+            printf "\033[32m[OK]\033[0m Postgres up na ${ELAPSED}s\n"
+            exit 0
+          fi
+          sleep 1
+          ELAPSED=$((ELAPSED + 1))
+        done
+        printf "\033[31m[X]\033[0m Postgres niet bereikbaar na {{.DB_HEALTHCHECK_TIMEOUT}}s\n"
+        docker compose logs --tail=20 postgres
+        exit 1
+
+  logs:
+    desc: Volg Postgres logs
+    cmds:
+      - docker compose logs -f postgres
+
+  reset:
+    desc: Stop, verwijder volume, start opnieuw (DESTRUCTIEF — data weg)
+    silent: false
+    cmds:
+      - docker compose down -v postgres
+      - task: up
+
+  generate:
+    desc: Prisma generate client
+    silent: false
+    cmds:
+      - pnpm exec prisma generate
+
+  migrate:
+    desc: Prisma migrate dev
+    silent: false
+    cmds:
+      - pnpm exec prisma migrate dev
+
+  studio:
+    desc: Prisma Studio
+    cmds:
+      - pnpm exec prisma studio
+
+  seed:
+    desc: Prisma db seed
+    cmds:
+      - pnpm exec prisma db seed
+```
+
+### Template — root `Taskfile.yml` `start:` met DB-aware flow (Next.js+Prisma)
+
+Vervang de standaard `start:` shortcut in de root Taskfile met deze flow voor Next.js+Prisma projecten (zie AP-32 en Profile 1B):
+
+```yaml
+includes:
+  core:    { taskfile: ./taskfiles/core.yml,    optional: false }
+  project: { taskfile: ./taskfiles/project.yml, optional: false }
+  db:      { taskfile: ./taskfiles/db.yml,      optional: true  }
+
+tasks:
+  start:
+    desc: Start full stack (env → db → prisma generate → next dev → curl)
+    silent: false
+    cmds:
+      - task: core:_ensure-dirs
+      - task: core:_bootstrap-env
+      - task: db:up                # start Postgres + healthcheck
+      - cmd: pnpm exec prisma generate
+        ignore_error: false        # blokkerend
+      - task: core:start           # next dev met PID-capture
+      # core:start doet zelf de curl-check via _wait-for-endpoint
+```
+
+`task stop` blijft hetzelfde (`core:stop`) — het stoppen van de DB-container is `task db:down`, niet automatisch onderdeel van `task stop` (zou dataverlies-risico zijn als andere processen ermee verbonden zijn).
+
+### Template — `docker-compose.yml` Postgres-service met dynamische host-poort
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASS:-postgres}
+      POSTGRES_DB: ${DB_NAME:-app}
+    ports:
+      # Host-poort uit ports.json database.docker_dev (NIET hardcoded 5432!)
+      # Skill vervangt ${DB_HOST_PORT} bij genereren met de ports.json-waarde.
+      - "${DB_HOST_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${DB_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+```
+
+`.env.local` en `.env.example` moeten dezelfde host-poort bevatten in `DATABASE_URL`:
+
+```
+DB_HOST_PORT=<database.docker_dev waarde>
+DATABASE_URL=postgresql://postgres:postgres@localhost:${DB_HOST_PORT}/app
+```

@@ -1,4 +1,4 @@
-<!-- v1.1.1 — 2026-05-03 -->
+<!-- v1.2.0 — 2026-05-03 -->
 <!-- Onderdeel van: taskfiles skill — zie SKILL.md voor index -->
 
 ## §5b — Anti-pattern detectie
@@ -35,6 +35,13 @@ Run deze checks bij AUDIT en bij elke generatie als sanity-check.
 | AP-26 | Hardcoded ports in vars terwijl `calcport` beschikbaar is OF `ports.json` ontbreekt | **hoog** |
 | AP-27 | Geen `task ports` command + geen `calcport` in doctor-checks | medium |
 | AP-28 | Twee+ services claimen dezelfde port-waarde (cross-language port-conflict) | **hoog** |
+| AP-29 | `clean`-task verwijdert runtime-dir (`.task/`) of dep-dir (`node_modules`/`.venv`) zonder eigen namespace (`clean:all`/`clean:deps`) | **hoog** |
+| AP-30 | Hardcoded `"5432:5432"` voor Postgres in `docker-compose*.yml` terwijl `ports.json` een projectspecifieke `database.docker_dev` voorziet | **hoog** |
+| AP-31 | `DATABASE_URL` met hardcoded `:5432` i.p.v. de host-poort uit `ports.json` | **hoog** |
+| AP-32 | `task start` voor Next.js+Prisma start alleen de dev-server, niet `db:up` + healthcheck + `prisma generate` vooraf | **hoog** |
+| AP-33 | "Het werkt" claimen op basis van `task --list` alleen (parse-check ≠ runtime-check) | **hoog** |
+| AP-34 | Blinde overschrijving van bestaande `package.json` / `docker-compose.yml` / `.env*` zonder eerst te lezen en gericht te patchen | **hoog** |
+| AP-35 | Onnodige confirmation-vraag bij een uitvoerend werkwoord ("maak", "fix", "verbeter") wanneer geen destructieve actie nodig is | medium |
 
 Bij audit toon je gevonden anti-patterns met regelnummer + concrete fix.
 
@@ -158,26 +165,111 @@ voor elke <subdir>/package.json waar dependencies of devDependencies "next" beva
 **AP-26 — Hardcoded ports zonder calcport-integratie.**
 Brecht's setup gebruikt `calcport` (bash tool) dat poorten berekent obv repo-naam en de uitkomst opslaat in `ports.json` (root) + `ports.md` + AI-tool docs (`copilot-instructions.md`, `CLAUDE.md`, `AGENTS.md`). Hardcoded poorten in `vars:` ondermijnen dit en leiden tot port-conflicts tussen repos.
 
-**Detectie-checklist** (run aan het begin van AUDIT/STANDAARD/AUTO):
-1. Bestaat `calcport` als command? (`command -v calcport`)
+**Detectie-checklist** (run aan het begin van AUDIT/STANDAARD/AU
+TO/AUDIT/STANDAARD):
+1. Bestaat `calcport` als command?
 2. Bestaat `ports.json` in repo-root?
 3. Bestaat `ports.md` in repo-root?
-4. Heeft de Taskfile hardcoded poort-vars (regex: `_PORT:\s*['"]?\d+`)?
+4. Heeft de Taskfile hardcoded poort-vars?
 
-| calcport beschikbaar? | ports.json bestaat? | hardcoded ports? | Verdict |
-|---|---|---|---|
-| ja | ja | nee | OK ✅ |
-| ja | ja | ja | **AP-26** — vervang hardcoded met `sh:`-blok dat ports.json leest |
-| ja | nee | ja | **AP-26** — genereer `ports.json` via `calcport`, dan vervang hardcoded |
-| ja | nee | nee | mogelijk nieuw project — run `calcport` om ports.json te seeden |
-| nee | — | — | calcport is system-conventie maar ontbreekt: melden in doctor, fallback gebruiken |
+**Fix-patroon (canonical):** vervang hardcoded vars met `sh:`-blok dat `ports.json` leest. Run `calcport --auto` zonder `--range` als `ports.json` nog niet betrouwbaar is — de auto-mode kiest een vrij range voor de repo-naam.
 
-**Fix-patroon (canonical):**
+---
+
+### Toelichting bij AP-29 t/m AP-35 — Database, validatie en gedragsregels (v1.2.0)
+
+**AP-29 — Destructieve `clean`-task.**
+Een `clean`-task hoort **alleen** build-artefacten te verwijderen (`.next/`, `dist/`, `out/`, `coverage/`). Het verwijderen van `node_modules/`, `.venv/` of `.task/` hoort bij een **eigen namespace** zodat de gebruiker niet per ongeluk dependencies wegmaakt.
+
+**Fix-patroon:**
 
 ```yaml
-vars:
-  PORTS_FILE: '{{default "ports.json" .PORTS_FILE}}'
-  DEV_PORT:
-    sh: |
-      if [ -f "{{.PORTS_FILE}}" ]; then
-        python3 -c 'import json; d=json.load(open("{{.PORTS_FILE}}")); print(d.get("standard_d
+clean:        { desc: Build-artefacten,  cmds: [rm -rf .next dist out coverage] }
+clean:deps:   { desc: Dependencies,      cmds: [rm -rf node_modules .venv] }
+clean:runtime:{ desc: Runtime + PID,     cmds: [rm -rf .task] }
+clean:all:    { desc: ALLES (destructief), cmds: [task: clean, task: clean:deps, task: clean:runtime] }
+```
+
+**AP-30 — Hardcoded `"5432:5432"` voor Postgres.**
+Als `ports.json` een projectspecifieke `database.docker_dev` voorziet, moet `docker-compose*.yml` die host-poort gebruiken — niet `5432`. Container-side blijft `5432` (interne Postgres-poort), host-side wordt projectspecifiek zodat meerdere repos parallel kunnen draaien.
+
+**Port-mapping standaard (verplicht in Profile 1 Next.js + Prisma/Postgres):**
+
+| Doel | ports.json sleutel | Toepassing |
+|---|---|---|
+| Next.js dev | `standard_development.frontend` | `next dev --port <waarde>` |
+| Next.js prod | `standard_production.frontend` | `next start --port <waarde>` |
+| Postgres host-poort | `database.docker_dev` | `docker-compose.yml` `ports: ["<waarde>:5432"]` + `DATABASE_URL` |
+| Postgres container | `5432` (vast) | container-side van port-mapping |
+
+**Fix-patroon (`docker-compose.yml`):**
+
+```diff
+services:
+  postgres:
+    image: postgres:16
+    ports:
+-     - "5432:5432"
++     - "<%= database.docker_dev %>:5432"
+```
+
+Toepassen in: `docker-compose.yml`, `.env.local`, `.env.example`, `taskfiles/db.yml`, en in elke `package.json` script die naar de database verbindt.
+
+**AP-31 — `DATABASE_URL` met hardcoded `:5432`.**
+Zelfde principe als AP-30. `DATABASE_URL` moet de host-poort gebruiken — dezelfde waarde als de host-side van docker-compose mapping.
+
+**Fix-patroon (`.env.local` + `.env.example`):**
+
+```diff
+- DATABASE_URL=postgresql://user:pass@localhost:5432/dbname
++ DATABASE_URL=postgresql://user:pass@localhost:<database.docker_dev>/dbname
+```
+
+**AP-32 — `task start` mist database-startflow voor Next.js+Prisma.**
+Voor projecten met Prisma + Postgres moet `task start` deze flow uitvoeren, **in deze volgorde**:
+
+1. `_bootstrap-env` (env-bestand aanwezig of vanuit `.env.example`)
+2. `task db:up` (Postgres container starten)
+3. `task db:healthcheck` (`pg_isready` polling, max 30s)
+4. `prisma generate` (alleen als `schema.prisma` aanwezig)
+5. `next dev --port <DEV_PORT>` (in background, met PID-capture via `_wait-for-endpoint`)
+6. `curl` check op `http://localhost:<DEV_PORT>` (200/3xx/404 = OK)
+
+Bij stap 3 of 6 faal: stop, toon laatste 20 regels van het log, exit 1.
+
+**Fix-patroon:** voeg een `taskfiles/db.yml` include toe met `db:up`/`db:healthcheck`/`db:status`/`db:down`/`db:logs`. Update root `start:` om `db:up` + healthcheck vóór `core:start` te chainen voor projecten waar `schema.prisma` of `docker-compose.yml` met Postgres bestaat.
+
+**AP-33 — "Het werkt" claimen na alleen `task --list`.**
+`task --list` bewijst alleen dat de Taskfile YAML-parseerbaar is. Het bewijst **niet** dat:
+- de tasks werken
+- de poorten kloppen
+- de database start
+- de dev-server bereikbaar is
+
+**Verplichte minimale runtime-validatie** (volgorde):
+
+1. `task --list` (parse-check)
+2. `task doctor` (tooling-check)
+3. `task db:up` (database start, indien Postgres aanwezig)
+4. `task db:status` (`pg_isready` healthcheck)
+5. `task start` (full stack start)
+6. `curl -fsSk -o /dev/null -w "%{http_code}\n" http://localhost:<DEV_PORT>` (dev-url bereikbaar)
+
+Bij elke fail: stop, toon exacte fout (laatste 20 logregels of curl-fout), toon vermoedelijke oorzaak, stel een concrete fix voor (of pas die toe als ze veilig is).
+
+**AP-34 — Blinde overschrijving van bestaande config-bestanden.**
+Bij STANDAARD/REFACTOR/FIX op een bestaand project mag de skill `package.json`, `docker-compose.yml`, `.env.example`, `.env.local`, `Taskfile.yml`, of `taskfiles/*.yml` **nooit** blind overschrijven.
+
+**Verplichte volgorde:**
+
+1. **Lees** het huidige bestand eerst
+2. **Patch gericht** — alleen de regels die fout zijn (specifieke vars, scripts-entries, port-mappings)
+3. **Bewaar** structuur, comments en niet-relevante content
+4. **Samenvat** kort welke regels gewijzigd zijn (vóór de "wat is gewijzigd" output)
+
+Bij echt destructieve wijziging (bv. herstructurering van docker-compose-services): `.archive/<file>.legacy` aanmaken vóór schrijven.
+
+**AP-35 — Onnodige akkoordvraag bij uitvoerend werkwoord.**
+Als de gebruiker een uitvoerend werkwoord gebruikt ("maak", "fix", "verbeter", "pas aan", "genereer", "bouw", "herstel", "doe", "zet op"), is de opdracht **impliciet bevestigd**. De skill moet direct uitvoeren en achteraf rapporteren — geen "Akkoord om alles toe te passen?" tussenvoegen.
+
+**Wel confirmation:** alleen bij destructie, dataverlies, blinde overschrijving (AP-34), of echte inhoudelijke twijfel. Zie `SKILL.md` Confirmation-gates voor de volledige regel.

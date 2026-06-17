@@ -1,4 +1,4 @@
-<!-- v1.1.1 — 2026-05-03 -->
+<!-- v1.2.0 — 2026-05-03 -->
 <!-- Onderdeel van: taskfiles skill — zie SKILL.md voor index -->
 
 ## §10 — Validatiechecklist
@@ -51,10 +51,59 @@ Een task in `core:*` of `project:*` is **niet voldoende** — er moet een corres
 - [ ] **Test:** `task --list` (of `task` zonder args) toont alle root-shortcuts. Verifieer dat **`task doctor`** en **`task setup`** beide werken — dit zijn de meest-vergeten shortcuts
 - [ ] **Geen redundante project-aliases** voor wat root al biedt (bv. `project:dev` als alias voor `task start` is verwarrend → schrappen)
 
-**Destructieve clean-tasks (sinds v1.1.1):**
+**Destructieve clean-tasks (AP-29, sinds v1.1.1, geformaliseerd in v1.2.0):**
 
 - [ ] `task clean` verwijdert **alleen** build-artefacten (`.next/`, `dist/`, `out/`, `coverage/`)
-- [ ] `task clean` verwijdert **niet** `.task/` (runtime), `node_modules/`, `.venv/` — die zijn voor `clean:all` of `clean:deps` (toekomstige AP-29)
+- [ ] `task clean` verwijdert **niet** `.task/` (runtime), `node_modules/`, `.venv/` — die zijn voor `clean:all`, `clean:deps`, of `clean:runtime`
+
+**Database port-mapping (Next.js+Prisma+Postgres — AP-30/31, sinds v1.2.0):**
+
+- [ ] `docker-compose*.yml` Postgres-service heeft `ports: ["<database.docker_dev>:5432"]` — **niet** `"5432:5432"` (AP-30)
+- [ ] `DATABASE_URL` in `.env.local` + `.env.example` gebruikt **dezelfde host-poort** als de docker-compose mapping (AP-31)
+- [ ] `task db:up` en `task db:status` rapporteren de **projectspecifieke** host-poort, niet hardcoded 5432
+- [ ] Port-mapping consistent in **alle** files: `Taskfile.yml`, `taskfiles/core.yml`, `taskfiles/db.yml`, `docker-compose.yml`, `.env.local`, `.env.example`, eventuele `package.json` scripts
+
+**Start-flow voor Next.js+Prisma (AP-32, sinds v1.2.0):**
+
+`task start` moet voor projecten met Prisma+Postgres in deze volgorde uitvoeren:
+
+- [ ] 1. Env bootstrap (`.env.local` aanwezig of vanuit `.env.example`)
+- [ ] 2. `task db:up` — Postgres container starten
+- [ ] 3. `task db:healthcheck` — `pg_isready` polling (max 30s)
+- [ ] 4. `prisma generate` — alleen als `schema.prisma` aanwezig
+- [ ] 5. `next dev --port <DEV_PORT>` in background met PID-capture
+- [ ] 6. `curl` check op `http://localhost:<DEV_PORT>` (200/3xx/404 = OK)
+
+Bij stap 3 of 6 faal: stop, toon laatste 20 logregels, exit 1.
+
+**Runtime validatie verplicht — niet alleen parse-check (AP-33, sinds v1.2.0):**
+
+`task --list` bewijst alleen YAML-parseerbaarheid, niet werking. Verplichte minimale runtime-validatie:
+
+- [ ] 1. `task --list` (parse-check, basisvereiste)
+- [ ] 2. `task doctor` (tooling-check)
+- [ ] 3. `task db:up` (indien Postgres aanwezig)
+- [ ] 4. `task db:status` (`pg_isready` healthcheck)
+- [ ] 5. `task start` (full stack start, met curl-check ingebouwd)
+- [ ] 6. `curl -fsSk http://localhost:<DEV_PORT>` (dev-url bereikbaar — alleen als `task start` dit niet al doet)
+
+Bij elke fail: stop, toon exacte fout + vermoedelijke oorzaak + concrete fix-suggestie (of pas die toe als veilig).
+
+**Bestaande-bestanden regel (AP-34, sinds v1.2.0):**
+
+Bij STANDAARD/REFACTOR/FIX op een bestaand project:
+
+- [ ] **Eerst lezen** van `package.json`, `docker-compose.yml`, `.env*`, `Taskfile.yml`, `taskfiles/*.yml`
+- [ ] **Gericht patchen** — alleen de regels die fout zijn
+- [ ] **Structuur, comments en niet-relevante content** blijven behouden
+- [ ] **Korte samenvatting** van gewijzigde regels in de output
+- [ ] Bij echt destructieve herstructurering: `.archive/<file>.legacy` aanmaken
+
+**Uitvoeringsregel (AP-35, sinds v1.2.0):**
+
+- [ ] Bij uitvoerend werkwoord ("maak", "fix", "verbeter", "pas aan", "genereer", "bouw", "herstel"): **direct uitvoeren**, geen "Akkoord?"-vraag
+- [ ] Confirmation alleen bij: destructie, dataverlies, blinde overschrijving (AP-34), echte twijfel
+- [ ] Output achteraf in vaste vorm — zie Output-regel in `flows/standard.md`
 
 Toon checklist-resultaat aan gebruiker. Falen = blokkeren tot opgelost.
 

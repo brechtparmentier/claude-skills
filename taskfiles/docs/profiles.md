@@ -1,4 +1,4 @@
-<!-- v1.1.0 — 2026-05-03 -->
+<!-- v1.2.0 — 2026-05-03 -->
 <!-- Onderdeel van: taskfiles skill — zie SKILL.md voor index -->
 
 ## §3 — Projecttype-profielen
@@ -48,6 +48,46 @@ Elk profiel definieert: **default Pattern**, **default vars**, **verplichte task
 - **PM2-aware**: als project PM2 gebruikt (huidig of legacy), activeer AP-25 fix in `_kill-mode`
 - **Mono-repo aware**: als `web/`, `frontend/`, `app/`, `dashboard/` sub-mappen bestaan met `package.json` + `next` dep, scan ze ook voor AP-24 (sub-project)
 - **Reference (gold)**: `linuxoptiplexvpn/nextjs_frontend-gdriverights/`
+
+#### Profiel 1B — Next.js + Prisma + Postgres (sub-variant, sinds v1.2.0)
+
+Activeren wanneer `schema.prisma` aanwezig is OF `docker-compose*.yml` een `postgres`-service definieert.
+
+**Port-mapping standaard (verplicht, zie AP-30/31):**
+
+| Doel | ports.json sleutel | Toepassing |
+|---|---|---|
+| Next.js dev | `standard_development.frontend` | `next dev --port <waarde>` |
+| Next.js prod | `standard_production.frontend` | `next start --port <waarde>` |
+| Postgres host-poort | `database.docker_dev` | `docker-compose.yml` `ports: ["<waarde>:5432"]` + `DATABASE_URL` |
+| Postgres container | `5432` (vast) | container-side van port-mapping |
+
+**Apply consequent in**: `Taskfile.yml`, `taskfiles/core.yml`, `taskfiles/db.yml`, `docker-compose.yml`, `.env.local`, `.env.example`, relevante `package.json` scripts.
+
+**`task start` start-flow (verplicht, zie AP-32):**
+
+1. Env bootstrap (`_bootstrap-env`)
+2. `task db:up` — Postgres container starten
+3. `task db:healthcheck` — `pg_isready` polling (max 30s)
+4. `prisma generate` — alleen als `schema.prisma` aanwezig
+5. `next dev --port <DEV_PORT>` in background (met PID-capture via `_wait-for-endpoint`)
+6. `curl` check op `http://localhost:<DEV_PORT>`
+
+Bij stap 3 of 6 faal: stop, toon laatste 20 logregels, exit 1.
+
+**Verplichte tasks (extra t.o.v. Profile 1):** `db:up`, `db:down`, `db:status`, `db:healthcheck`, `db:logs`, `db:reset`, `db:generate` (Prisma), `db:migrate`, `db:studio`, `db:seed`
+
+**Doctor-tools (extra):** `docker`, `pg_isready` (uit `postgresql-client`), `prisma` (via `pnpm exec`)
+
+**Calcport one-liner als `ports.json` nog niet betrouwbaar is:**
+
+```bash
+calcport --auto   # geen --range — auto-mode kiest een vrij range obv repo-naam
+```
+
+Daarna `ports.json` als bron van waarheid. **Nooit** ports.json bypassen door hardcoded poorten in vars te schrijven.
+
+**Reference**: nog geen drop-in profile in `references/profiles/`; voeg toe in toekomstige release. Voor nu: gebruik `references/canonical/` als Next.js basis en breid uit met de `db.yml`-template uit `docs/mini-templates.md` § "Postgres + Prisma db.yml".
 
 ### Profiel 2 — Python app
 

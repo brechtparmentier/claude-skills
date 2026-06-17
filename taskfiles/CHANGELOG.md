@@ -19,6 +19,64 @@ Bij elke wijziging: bump versie in `SKILL.md` frontmatter (`version` + `updated`
 
 ---
 
+## [1.2.0] — 2026-05-03
+
+### Added — 7 nieuwe anti-patterns (AP-29 t/m AP-35)
+- **AP-29** (hoog): `clean`-task verwijdert runtime-dir/dep-dir zonder eigen namespace — moet `clean:all`/`clean:deps`/`clean:runtime` zijn
+- **AP-30** (hoog): hardcoded `"5432:5432"` in `docker-compose*.yml` terwijl `ports.json` `database.docker_dev` voorziet — gebruik projectspecifieke host-poort
+- **AP-31** (hoog): `DATABASE_URL` met hardcoded `:5432` i.p.v. host-poort uit `ports.json`
+- **AP-32** (hoog): `task start` voor Next.js+Prisma start alleen dev-server, niet `db:up` + healthcheck + `prisma generate` vooraf
+- **AP-33** (hoog): "Het werkt" claimen op basis van alleen `task --list` (parse-check ≠ runtime-check)
+- **AP-34** (hoog): blinde overschrijving van bestaande `package.json`/`docker-compose.yml`/`.env*`/`Taskfile.yml` zonder eerst lezen en gericht patchen
+- **AP-35** (medium): onnodige confirmation-vraag bij uitvoerend werkwoord ("maak", "fix", "verbeter", "pas aan", "genereer", "bouw", "herstel")
+
+### Added — 6 nieuwe gedragsregels in flows/standard.md
+- **§7B.1 Uitvoeringsregel**: direct uitvoeren bij uitvoerend werkwoord, geen "Akkoord?"-tussenvraag tenzij destructief
+- **§7B.2 Bestaande-bestanden-regel**: lezen → gericht patchen → structuur bewaren → samenvatten — nooit blinde `cat > file` overschrijving
+- **§7B.3 Database/Port-regel**: `calcport --auto` zonder `--range` voor seed; `ports.json` als bron van waarheid met vaste sleutel-mapping (`standard_development.frontend`, `standard_production.frontend`, `database.docker_dev`, container vast `5432`)
+- **§7B.4 Start-regel** voor Next.js+Prisma: env → `db:up` → healthcheck → `prisma generate` → next dev → curl-check
+- **§7B.5 Validatie-regel**: minimaal `task --list` + `task doctor` + `task db:up` + `task db:status` + `task start` + curl op dev-url. Bij falen: stop + show error + propose fix
+- **§7B.6 Output-regel**: vaste output-vorm — Wat gewijzigd / Tests succesvol / Tests gefaald / Wat de gebruiker nog moet doen. Geen pep-talk
+
+### Added — drop-in templates in docs/mini-templates.md
+- Postgres + Prisma `taskfiles/db.yml` (gen-3 compatible, host-poort uit `ports.json`)
+- Next.js+Prisma `start:` flow in root Taskfile (env → db → prisma generate → next dev)
+- `docker-compose.yml` Postgres-service met `${DB_HOST_PORT:-5432}:5432` dynamisch
+
+### Added — Profile 1B in docs/profiles.md
+- Next.js + Prisma + Postgres sub-variant met port-mapping standaard
+- `task start` start-flow expliciet gespecificeerd
+- Extra verplichte tasks: `db:up`/`db:down`/`db:status`/`db:healthcheck`/`db:logs`/`db:reset`/`db:generate`/`db:migrate`/`db:studio`/`db:seed`
+- Extra doctor-tools: `docker`, `pg_isready`, `prisma`
+
+### Changed — SKILL.md confirmation-gates tabel
+- STANDAARD opgesplitst in "niet-destructief" (direct uitvoeren bij uitvoerend werkwoord) en "met overschrijven/legacy-archive" (toon plan + confirm)
+- Expliciete lijst toegevoegd van wanneer wél en wanneer níet confirmation vragen
+- Principe: "AUTO mag niet blind zijn voor risico — maar wel besluitvaardig"
+
+### Updated — docs/never-do.md
+- 4 nieuwe categorieën hard-NO regels: Database/port, Validatie/claim, Bestaande-bestanden, Gedrag
+- Expliciete kruisverwijzingen naar AP-30 t/m AP-35
+
+### Updated — docs/validation-checklist.md
+- AP-29 (destructieve clean) van preview naar geformaliseerd
+- AP-30/31 (DB port-mapping) verplichte checks
+- AP-32 (Prisma start-flow) verplichte 6-stappen flow
+- AP-33 (runtime validatie) verplichte 6-commando set
+- AP-34 (bestaande-bestanden) verplichte 5-stappen volgorde
+- AP-35 (uitvoeringsregel) gedragsregel
+
+### Real-run trigger
+- Real-run op een Next.js+Prisma+Postgres project waar de skill:
+  - onnodig akkoord vroeg bij uitvoerend "maak/fix"-werkwoord
+  - `task start` alleen Next.js startte, niet de Postgres-DB
+  - `calcport` runde maar de DB-poort niet consequent in docker-compose/.env*/`DATABASE_URL` toepaste
+  - `task --list` als voldoende validatie behandelde
+  - `db:up` hardcoded "poort 5432" rapporteerde ondanks projectspecifieke host-poort
+- Alle 5 issues nu door regels + anti-patterns gevangen
+
+---
+
 ## [1.1.1] — 2026-05-03
 
 ### Fixed — drift in canonical reference (kritiek)
