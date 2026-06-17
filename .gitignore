@@ -7,3 +7,6 @@
 # editor
 .vscode/
 *.swp
+
+# Chat-history exports horen niet in skills
+taskfiles/docs/chat-history/

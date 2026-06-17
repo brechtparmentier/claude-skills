@@ -1,6 +1,6 @@
 ---
 name: taskfiles
-version: 1.2.0
+version: 1.2.1
 updated: 2026-05-03
 description: >
   Activeer deze skill wanneer de gebruiker een Taskfile.yml wil maken, auditen, fixen, standaardiseren
